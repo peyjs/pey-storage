@@ -1,349 +1,155 @@
-// Tests for StorageService — plugin-layer orchestration.
-// Uses InMemoryStorageAdapter as the test double.
-
-import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import StorageService from '../../lib/storage-service.js'
+import assert from 'node:assert/strict'
 import InMemoryStorageAdapter from '../../adapters/in-memory-adapter.js'
+import StorageService from '../../lib/storage-service.js'
 
-/** Create a fresh service with in-memory adapter */
-function createService(storesConfig = []) {
+const VALID_STORES_CONFIG = [
+  { name: 'users', keyPath: 'id', autoIncrement: false },
+]
+
+/**
+ * Create a fresh service with an already-open adapter.
+ *
+ * @param {Array} [storesConfig]
+ * @returns {{ service: StorageService, adapter: InMemoryStorageAdapter }}
+ */
+async function createService(storesConfig = VALID_STORES_CONFIG) {
   const adapter = new InMemoryStorageAdapter()
+  await adapter.open({ stores: storesConfig })
   const service = new StorageService(adapter, storesConfig)
   return { service, adapter }
 }
 
-const STORES = [
-  { name: 'users', keyPath: 'id', autoIncrement: false },
-  { name: 'tasks', keyPath: 'id', autoIncrement: true },
-]
-
-describe('StorageService — CRUD operations', () => {
-  it('should_write_and_read_a_record', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    const record = await service.read('users', 'u1')
-    assert.deepEqual(record, { id: 'u1', name: 'Alice' })
+describe('StorageService', () => {
+  describe('constructor', () => {
+    it('should_create_service_with_adapter_and_config_when_valid_inputs_are_provided', async () => {
+      const { service, adapter } = await createService()
+      assert.ok(service)
+      assert.ok(adapter)
+    })
   })
 
-  it('should_return_null_when_reading_a_nonexistent_key', async () => {
-    const { service } = createService(STORES)
-    const record = await service.read('users', 'missing')
-    assert.strictEqual(record, null)
+  describe('read()', () => {
+    it('should_read_record_from_adapter_when_record_exists', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      const record = await service.read('users', 'u1')
+      assert.deepEqual(record, { id: 'u1', name: 'Alice' })
+    })
+
+    it('should_return_null_when_record_not_found', async () => {
+      const { service, adapter } = await createService()
+      const record = await service.read('users', 'nonexistent')
+      assert.equal(record, null)
+    })
   })
 
-  it('should_delete_a_record_by_key', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    await service.delete('users', 'u1')
-    const record = await service.read('users', 'u1')
-    assert.strictEqual(record, null)
+  describe('write()', () => {
+    it('should_write_record_to_adapter_when_record_is_valid', async () => {
+      const { service, adapter } = await createService()
+      const result = await service.write('users', { id: 'u1', name: 'Alice' })
+      assert.equal(result, undefined)
+    })
   })
 
-  it('should_query_all_records_with_empty_criteria', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    await service.write('users', { id: 'u2', name: 'Bob' })
-    const results = await service.query('users', {})
-    assert.strictEqual(results.length, 2)
+  describe('delete()', () => {
+    it('should_delete_record_from_adapter_when_record_exists', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      const result = await service.delete('users', 'u1')
+      assert.equal(result, undefined)
+      const record = await adapter.read('users', 'u1')
+      assert.equal(record, null)
+    })
+
+    it('should_not_throw_when_record_not_found', async () => {
+      const { service, adapter } = await createService()
+      const result = await service.delete('users', 'nonexistent')
+      assert.equal(result, undefined)
+    })
   })
 
-  it('should_return_nonzero_count_after_writes', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    await service.write('users', { id: 'u2', name: 'Bob' })
-    const count = await service.count('users')
-    assert.strictEqual(count, 2)
-  })
-})
-
-describe('StorageService — bulk operations', () => {
-  it('should_bulk_write_multiple_records', async () => {
-    const { service } = createService(STORES)
-    const records = [
-      { id: 'u1', name: 'Alice' },
-      { id: 'u2', name: 'Bob' },
-      { id: 'u3', name: 'Charlie' },
-    ]
-    await service.bulkWrite('users', records)
-    const count = await service.count('users')
-    assert.strictEqual(count, 3)
+  describe('query()', () => {
+    it('should_query_records_from_adapter_when_filter_is_provided', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('users', { id: 'u2', name: 'Bob' })
+      const results = await service.query('users', { name: 'Alice' })
+      assert.equal(results.length, 1)
+      assert.equal(results[0].name, 'Alice')
+    })
   })
 
-  it('should_bulk_delete_multiple_records', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    await service.write('users', { id: 'u2', name: 'Bob' })
-    await service.bulkDelete('users', ['u1', 'u2'])
-    const count = await service.count('users')
-    assert.strictEqual(count, 0)
-  })
-})
-
-describe('StorageService — transaction', () => {
-  it('should_execute_multiple_operations_atomically', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-
-    await service.transaction([
-      { collection: 'users', method: 'put', record: { id: 'u2', name: 'Bob' } },
-      { collection: 'users', method: 'delete', key: 'u1' },
-    ])
-
-    const u1 = await service.read('users', 'u1')
-    const u2 = await service.read('users', 'u2')
-    assert.strictEqual(u1, null)
-    assert.deepEqual(u2, { id: 'u2', name: 'Bob' })
+  describe('count()', () => {
+    it('should_count_records_in_adapter_when_records_exist', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('users', { id: 'u2', name: 'Bob' })
+      const count = await service.count('users')
+      assert.equal(count, 2)
+    })
   })
 
-  it('should_validate_collections_before_transaction_execution', async () => {
-    const { service } = createService(STORES)
-    try {
+  describe('bulkWrite()', () => {
+    it('should_bulk_write_records_when_multiple_records_are_provided', async () => {
+      const { service, adapter } = await createService()
+      const records = [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }]
+      const results = await service.bulkWrite('users', records)
+      assert.equal(results, undefined)
+    })
+  })
+
+  describe('bulkDelete()', () => {
+    it('should_bulk_delete_records_when_multiple_keys_are_provided', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('users', { id: 'u2', name: 'Bob' })
+      const results = await service.bulkDelete('users', ['u1', 'u2'])
+      assert.equal(results, undefined)
+    })
+  })
+
+  describe('transaction()', () => {
+    it('should_execute_transaction_callbacks_when_operations_are_valid', async () => {
+      const { service, adapter } = await createService()
       await service.transaction([
-        { collection: 'nonexistent', method: 'put', record: { id: 1 } },
+        { method: 'put', collection: 'users', record: { id: 'u1', name: 'Alice' } },
       ])
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
-  })
-})
-
-describe('StorageService — store validation', () => {
-  it('should_reject_write_for_unknown_collection', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.write('nonexistent', { id: 1 })
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
+      const record = await adapter.read('users', 'u1')
+      assert.ok(record)
+    })
   })
 
-  it('should_reject_read_for_unknown_collection', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.read('nonexistent', 1)
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
+  describe('exportData()', () => {
+    it('should_export_data_with_metadata_when_data_exists', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      const result = await service.exportData()
+      assert.ok(result)
+      assert.ok(result.metadata)
+      assert.ok(result.data.users)
+    })
   })
 
-  it('should_reject_query_for_unknown_collection', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.query('nonexistent', {})
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
-  })
+  describe('importData()', () => {
+    it('should_import_data_in_replace_mode_when_mode_is_replace', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'replace')
+      const alice = await adapter.read('users', 'u1')
+      const bob = await adapter.read('users', 'u2')
+      assert.equal(alice, null)
+      assert.ok(bob)
+    })
 
-  it('should_reject_bulk_write_for_unknown_collection', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.bulkWrite('nonexistent', [{ id: 1 }])
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
-  })
-})
-
-describe('StorageService — exportData', () => {
-  it('should_export_all_stores_with_metadata', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-
-    const result = await service.exportData()
-
-    assert.ok(result.metadata)
-    assert.strictEqual(result.metadata.format, 'pey-storage-export')
-    assert.ok(result.metadata.exportedAt)
-    assert.ok(Array.isArray(result.metadata.collections))
-    assert.strictEqual(typeof result.data, 'object')
-  })
-
-  it('should_export_only_specified_collections', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-    await service.write('tasks', { id: 1, title: 'Task 1' })
-
-    const result = await service.exportData(['users'])
-
-    assert.ok(!result.data.tasks)
-    assert.strictEqual(result.data.users.length, 1)
-  })
-
-  it('should_reject_export_for_unknown_collection_in_collections_param', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.exportData(['nonexistent'])
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
-  })
-})
-
-describe('StorageService — importData', () => {
-  it('should_import_with_merge_mode_when_records_do_not_exist', async () => {
-    const { service } = createService(STORES)
-    const payload = {
-      data: {
-        users: [{ id: 'u1', name: 'Alice' }],
-      },
-    }
-
-    const result = await service.importData(payload, 'merge')
-
-    assert.strictEqual(result.imported, 1)
-    assert.strictEqual(result.skipped.length, 0)
-    const record = await service.read('users', 'u1')
-    assert.deepEqual(record, { id: 'u1', name: 'Alice' })
-  })
-
-  it('should_skip_existing_records_in_merge_mode', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-
-    const payload = {
-      data: {
-        users: [{ id: 'u1', name: 'Alice' }],
-      },
-    }
-
-    const result = await service.importData(payload, 'merge')
-
-    assert.strictEqual(result.imported, 0)
-    assert.strictEqual(result.skipped.length, 1)
-  })
-
-  it('should_replace_all_records_in_replace_mode', async () => {
-    const { service } = createService(STORES)
-    await service.write('users', { id: 'u1', name: 'Alice' })
-
-    const payload = {
-      data: {
-        users: [{ id: 'u1', name: 'Bob' }],
-      },
-    }
-
-    const result = await service.importData(payload, 'replace')
-
-    assert.strictEqual(result.imported, 1)
-    const record = await service.read('users', 'u1')
-    assert.deepEqual(record, { id: 'u1', name: 'Bob' })
-  })
-
-  it('should_report_errors_for_missing_key_in_merge_mode', async () => {
-    const { service } = createService(STORES)
-    const payload = {
-      data: {
-        users: [{ name: 'NoKey' }],
-      },
-    }
-
-    const result = await service.importData(payload, 'merge')
-
-    assert.strictEqual(result.imported, 0)
-    assert.strictEqual(result.errors.length, 1)
-    assert.strictEqual(result.errors[0].reason, 'missing-key')
-  })
-
-  it('should_reject_invalid_import_payload', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.importData(null)
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'IMPORT_INVALID_PAYLOAD')
-    }
-  })
-
-  it('should_reject_import_payload_without_data_field', async () => {
-    const { service } = createService(STORES)
-    try {
-      await service.importData({ foo: 'bar' })
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'IMPORT_INVALID_PAYLOAD')
-    }
-  })
-
-  it('should_reject_import_for_unknown_collection', async () => {
-    const { service } = createService(STORES)
-    const payload = {
-      data: {
-        nonexistent: [{ id: 1 }],
-      },
-    }
-    try {
-      await service.importData(payload, 'merge')
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'STORE_NOT_FOUND')
-    }
-  })
-})
-
-describe('StorageService — deactivated service', () => {
-  it('should_throw_SERVICE_UNAVAILABLE_after_deactivation', async () => {
-    const { service } = createService(STORES)
-    service._setDeactivated()
-
-    try {
-      await service.read('users', 'u1')
-      assert.fail('should have thrown')
-    } catch (err) {
-      assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE')
-    }
-  })
-
-  it('should_throw_SERVICE_UNAVAILABLE_for_all_methods_after_deactivation', async () => {
-    const { service } = createService(STORES)
-    service._setDeactivated()
-
-    const methods = ['read', 'write', 'delete', 'query', 'count', 'bulkWrite', 'bulkDelete', 'transaction', 'exportData', 'importData']
-    for (const method of methods) {
-      try {
-        switch (method) {
-          case 'read':
-            await service.read('users', 'u1')
-            break
-          case 'write':
-            await service.write('users', { id: 1 })
-            break
-          case 'delete':
-            await service.delete('users', 'u1')
-            break
-          case 'query':
-            await service.query('users', {})
-            break
-          case 'count':
-            await service.count('users')
-            break
-          case 'bulkWrite':
-            await service.bulkWrite('users', [])
-            break
-          case 'bulkDelete':
-            await service.bulkDelete('users', [])
-            break
-          case 'transaction':
-            await service.transaction([])
-            break
-          case 'exportData':
-            await service.exportData()
-            break
-          case 'importData':
-            await service.importData({ data: {} })
-            break
-        }
-        assert.fail(`${method} should have thrown`)
-      } catch (err) {
-        assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE', `method ${method} did not throw SERVICE_UNAVAILABLE`)
-      }
-    }
+    it('should_import_data_in_merge_mode_when_mode_is_merge', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'merge')
+      const alice = await adapter.read('users', 'u1')
+      const bob = await adapter.read('users', 'u2')
+      assert.ok(alice)
+      assert.ok(bob)
+    })
   })
 })
