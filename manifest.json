@@ -25,7 +25,7 @@
             { "name": "key", "type": "string | number" }
           ],
           "returns": "Promise<object | null>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "RECORD_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "RECORD_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "write",
@@ -35,7 +35,7 @@
             { "name": "record", "type": "object" }
           ],
           "returns": "Promise<void>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "delete",
@@ -45,7 +45,7 @@
             { "name": "key", "type": "string | number" }
           ],
           "returns": "Promise<void>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "query",
@@ -55,7 +55,7 @@
             { "name": "criteria", "type": "object" }
           ],
           "returns": "Promise<object[]>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "count",
@@ -65,7 +65,7 @@
             { "name": "criteria", "type": "object" }
           ],
           "returns": "Promise<number>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "bulkWrite",
@@ -75,7 +75,7 @@
             { "name": "records", "type": "object[]" }
           ],
           "returns": "Promise<void>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "bulkDelete",
@@ -85,7 +85,7 @@
             { "name": "keys", "type": "(string | number)[]" }
           ],
           "returns": "Promise<void>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "transaction",
@@ -94,7 +94,7 @@
             { "name": "operations", "type": "Array<{ collection: string, method: string, args: Array }>" }
           ],
           "returns": "Promise<void>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "TRANSACTION_FAILED"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "TRANSACTION_FAILED", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "exportData",
@@ -103,7 +103,7 @@
             { "name": "collections", "type": "string[] | null" }
           ],
           "returns": "Promise<{ metadata: object, data: object }>",
-          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND"]
+          "errors": ["ADAPTER_NOT_OPEN", "STORE_NOT_FOUND", "SERVICE_UNAVAILABLE"]
         },
         {
           "name": "importData",
@@ -113,7 +113,7 @@
             { "name": "mode", "type": "'replace' | 'merge'" }
           ],
           "returns": "Promise<{ imported: number, skipped: object[], errors: object[] }>",
-          "errors": ["ADAPTER_NOT_OPEN", "IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
+          "errors": ["ADAPTER_NOT_OPEN", "IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "SERVICE_UNAVAILABLE"]
         }
       ]
     }
