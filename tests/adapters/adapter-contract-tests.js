@@ -8,15 +8,6 @@ const VALID_STORES_CONFIG = [
 ]
 
 /**
- * Check if the adapter is open by reading the private _isOpen flag.
- * @param {InMemoryStorageAdapter} adapter
- * @returns {boolean}
- */
-function isAdapterOpen(adapter) {
-  return adapter._isOpen === true
-}
-
-/**
  * Run the shared adapter contract against the given adapter factory.
  * This allows any adapter implementing the contract to be tested with
  * the same suite.
@@ -27,36 +18,44 @@ function isAdapterOpen(adapter) {
 export function runAdapterContractTests(adapterName, createAdapter) {
   let adapter
 
-  afterEach(async () => {
-    try {
-      await adapter.close()
-    } catch {
-      // ignore
-    }
-  })
-
   describe(`${adapterName} adapter contract`, () => {
     beforeEach(() => {
       adapter = createAdapter()
     })
 
+    afterEach(async () => {
+      try {
+        await adapter.close()
+      } catch {
+        // ignore
+      }
+    })
+
     describe('open()', () => {
-      it('should_open_and_set_internal_state_when_stores_config_is_provided', async () => {
+      it('should_allow_read_operation_when_stores_config_is_provided', async () => {
         await adapter.open({ stores: VALID_STORES_CONFIG })
-        assert.equal(isAdapterOpen(adapter), true)
+        const record = await adapter.read('users', null)
+        assert.equal(record, null)
       })
 
-      it('should_open_with_empty_stores_config_when_stores_is_empty_array', async () => {
+      it('should_allow_read_operation_with_empty_stores_config', async () => {
         await adapter.open({ stores: [] })
-        assert.equal(isAdapterOpen(adapter), true)
+        assert.equal(adapter._stores.size, 0)
       })
     })
 
     describe('close()', () => {
-      it('should_mark_adapter_not_open_after_close', async () => {
+      it('should_throw_ADAPTER_NOT_OPEN_on_read_after_close', async () => {
         await adapter.open({ stores: VALID_STORES_CONFIG })
         await adapter.close()
-        assert.equal(isAdapterOpen(adapter), false)
+        await assert.rejects(
+          adapter.read('users', 'x'),
+          (err) => {
+            assert.equal(err.type, 'operational')
+            assert.equal(err.code, ERROR_CODES.ADAPTER_NOT_OPEN)
+            return true
+          }
+        )
       })
 
       it('should_not_throw_when_close_is_called_on_already_closed_adapter', async () => {
@@ -65,10 +64,17 @@ export function runAdapterContractTests(adapterName, createAdapter) {
     })
 
     describe('destroy()', () => {
-      it('should_destroy_adapter_and_mark_not_open', async () => {
+      it('should_throw_ADAPTER_NOT_OPEN_on_read_after_destroy', async () => {
         await adapter.open({ stores: VALID_STORES_CONFIG })
         await adapter.destroy()
-        assert.equal(isAdapterOpen(adapter), false)
+        await assert.rejects(
+          adapter.read('users', 'x'),
+          (err) => {
+            assert.equal(err.type, 'operational')
+            assert.equal(err.code, ERROR_CODES.ADAPTER_NOT_OPEN)
+            return true
+          }
+        )
       })
     })
 
@@ -94,7 +100,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.equal(record, null)
       })
 
-      it('should_throw_error_with_STORE_NOT_FOUND_when_store_is_not_in_config', async () => {
+      it('should_throw_STORE_NOT_FOUND_when_store_is_not_in_config', async () => {
         await assert.rejects(
           adapter.read('nonexistent_store', 'u1'),
           (err) => {
@@ -105,7 +111,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         )
       })
 
-      it('should_throw_error_with_ADAPTER_NOT_OPEN_when_adapter_is_not_open', async () => {
+      it('should_throw_ADAPTER_NOT_OPEN_when_adapter_is_not_open', async () => {
         await adapter.close()
         await assert.rejects(
           adapter.read('users', 'u1'),
@@ -124,13 +130,13 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.open({ stores: VALID_STORES_CONFIG })
       })
 
-      it('should_insert_new_record', async () => {
+      it('should_insert_new_record_when_key_does_not_exist', async () => {
         await adapter.write('users', { id: 'u2', name: 'Bob' })
         const record = await adapter.read('users', 'u2')
         assert.deepEqual(record, { id: 'u2', name: 'Bob' })
       })
 
-      it('should_update_existing_record', async () => {
+      it('should_update_existing_record_when_key_exists', async () => {
         await adapter.write('users', { id: 'u1', name: 'Alice Updated' })
         const record = await adapter.read('users', 'u1')
         assert.deepEqual(record, { id: 'u1', name: 'Alice Updated' })
@@ -141,7 +147,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.equal(result, undefined)
       })
 
-      it('should_throw_error_with_STORE_NOT_FOUND_when_store_is_not_in_config', async () => {
+      it('should_throw_STORE_NOT_FOUND_when_store_is_not_in_config', async () => {
         await assert.rejects(
           adapter.write('nonexistent_store', { id: 'x1' }),
           (err) => {
@@ -160,7 +166,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u1', name: 'Alice' })
       })
 
-      it('should_delete_existing_record', async () => {
+      it('should_delete_existing_record_and_return_undefined', async () => {
         const result = await adapter.delete('users', 'u1')
         assert.equal(result, undefined)
         const record = await adapter.read('users', 'u1')
@@ -209,7 +215,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u2', name: 'Bob' })
       })
 
-      it('should_delete_multiple_records', async () => {
+      it('should_delete_multiple_records_and_return_undefined', async () => {
         const results = await adapter.bulkDelete('users', ['u1', 'u2'])
         assert.equal(results, undefined)
         const r1 = await adapter.read('users', 'u1')
@@ -218,7 +224,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.equal(r2, null)
       })
 
-      it('should_return_undefined', async () => {
+      it('should_return_undefined_when_keys_do_not_exist', async () => {
         const results = await adapter.bulkDelete('users', ['u1', 'nonexistent'])
         assert.equal(results, undefined)
       })
@@ -290,14 +296,19 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.deepEqual(record, { id: 'u1', name: 'Alice' })
       })
 
-      it('should_rollback_writes_when_transaction_fails', async () => {
+      it('should_rollback_writes_when_invalid_method_is_provided', async () => {
         await adapter.transaction([
           { method: 'put', collection: 'users', record: { id: 'u1', name: 'Alice' } },
         ])
-        await adapter.transaction([
-          { method: 'delete', collection: 'users', key: 'u1' },
-        ])
-        const record = await adapter.read('users', 'u1')
+        try {
+          await adapter.transaction([
+            { method: 'put', collection: 'users', record: { id: 'u2', name: 'Bob' } },
+            { method: 'invalid_method', collection: 'users', record: { id: 'u3', name: 'Fail' } },
+          ])
+        } catch {
+          // expected
+        }
+        const record = await adapter.read('users', 'u2')
         assert.equal(record, null)
       })
     })

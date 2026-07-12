@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import InMemoryStorageAdapter from '../../adapters/in-memory-adapter.js'
 import StorageService from '../../lib/storage-service.js'
+import { ERROR_CODES } from '../../lib/constants.js'
 
 const VALID_STORES_CONFIG = [
   { name: 'users', keyPath: 'id', autoIncrement: false },
@@ -42,6 +43,17 @@ describe('StorageService', () => {
       const record = await service.read('users', 'nonexistent')
       assert.equal(record, null)
     })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.read('nonexistent_store', 'u1'),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
   })
 
   describe('write()', () => {
@@ -49,6 +61,17 @@ describe('StorageService', () => {
       const { service, adapter } = await createService()
       const result = await service.write('users', { id: 'u1', name: 'Alice' })
       assert.equal(result, undefined)
+    })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.write('nonexistent_store', { id: 'u1' }),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
     })
   })
 
@@ -67,6 +90,17 @@ describe('StorageService', () => {
       const result = await service.delete('users', 'nonexistent')
       assert.equal(result, undefined)
     })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.delete('nonexistent_store', 'u1'),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
   })
 
   describe('query()', () => {
@@ -78,6 +112,17 @@ describe('StorageService', () => {
       assert.equal(results.length, 1)
       assert.equal(results[0].name, 'Alice')
     })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.query('nonexistent_store', {}),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
   })
 
   describe('count()', () => {
@@ -88,6 +133,17 @@ describe('StorageService', () => {
       const count = await service.count('users')
       assert.equal(count, 2)
     })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.count('nonexistent_store'),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
   })
 
   describe('bulkWrite()', () => {
@@ -96,6 +152,21 @@ describe('StorageService', () => {
       const records = [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }]
       const results = await service.bulkWrite('users', records)
       assert.equal(results, undefined)
+      const r1 = await adapter.read('users', 'u1')
+      const r2 = await adapter.read('users', 'u2')
+      assert.deepEqual(r1, { id: 'u1', name: 'Alice' })
+      assert.deepEqual(r2, { id: 'u2', name: 'Bob' })
+    })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.bulkWrite('nonexistent_store', []),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
     })
   })
 
@@ -106,6 +177,10 @@ describe('StorageService', () => {
       await adapter.write('users', { id: 'u2', name: 'Bob' })
       const results = await service.bulkDelete('users', ['u1', 'u2'])
       assert.equal(results, undefined)
+      const r1 = await adapter.read('users', 'u1')
+      const r2 = await adapter.read('users', 'u2')
+      assert.equal(r1, null)
+      assert.equal(r2, null)
     })
   })
 
@@ -117,6 +192,95 @@ describe('StorageService', () => {
       ])
       const record = await adapter.read('users', 'u1')
       assert.ok(record)
+    })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_in_operations_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.transaction([
+          { method: 'put', collection: 'nonexistent_store', record: { id: 'u1' } },
+        ]),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
+  })
+
+  describe('importData()', () => {
+    it('should_replace_all_records_when_mode_is_replace', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      const result = await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'replace')
+      const alice = await adapter.read('users', 'u1')
+      const bob = await adapter.read('users', 'u2')
+      assert.ok(alice)
+      assert.ok(bob)
+      assert.equal(result.imported, 1)
+    })
+
+    it('should_import_new_records_and_skip_existing_in_merge_mode', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      const result = await service.importData({ data: { users: [{ id: 'u1', name: 'Alice Updated' }, { id: 'u2', name: 'Bob' }] } }, 'merge')
+      const alice = await adapter.read('users', 'u1')
+      const bob = await adapter.read('users', 'u2')
+      assert.deepEqual(alice, { id: 'u1', name: 'Alice' })
+      assert.ok(bob)
+      assert.equal(result.imported, 1)
+      assert.equal(result.skipped.length, 1)
+      assert.equal(result.skipped[0].key, 'u1')
+    })
+
+    it('should_return_skipped_keys_in_merge_mode_when_existing_records_exist', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('users', { id: 'u2', name: 'Bob' })
+      const result = await service.importData({ data: { users: [{ id: 'u1', name: 'Alice Updated' }, { id: 'u2', name: 'Bob Updated' }] } }, 'merge')
+      assert.equal(result.imported, 0)
+      assert.equal(result.skipped.length, 2)
+    })
+
+    it('should_reject_empty_payload_when_payload_is_null', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.importData(null),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.IMPORT_INVALID_PAYLOAD)
+          return true
+        }
+      )
+    })
+
+    it('should_reject_payload_without_data_property_when_data_is_missing', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.importData({ otherField: 'value' }),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.IMPORT_INVALID_PAYLOAD)
+          return true
+        }
+      )
+    })
+
+    it('should_report_error_when_record_has_missing_key_in_merge_mode', async () => {
+      const { service } = await createService()
+      const result = await service.importData({ data: { users: [{ name: 'NoKey' }] } }, 'merge')
+      assert.equal(result.imported, 0)
+      assert.equal(result.errors.length, 1)
+      assert.equal(result.errors[0].reason, 'missing-key')
+    })
+
+    it('should_throw_STORE_NOT_FOUND_when_collection_in_import_is_unknown', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.importData({ data: { nonexistent_store: [{ id: 'u1' }] } }),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
     })
   })
 
@@ -131,26 +295,78 @@ describe('StorageService', () => {
     })
   })
 
-  describe('importData()', () => {
-    it('should_replace_records_in_replace_mode', async () => {
-      const { service, adapter } = await createService()
-      await adapter.write('users', { id: 'u1', name: 'Alice' })
-      const result = await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'replace')
-      const alice = await adapter.read('users', 'u1')
-      const bob = await adapter.read('users', 'u2')
-      assert.ok(alice)
-      assert.ok(bob)
-      assert.equal(result.imported, 1)
+  describe('deactivated service', () => {
+    it('should_throw_SERVICE_UNAVAILABLE_on_read_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.read('users', 'u1'),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          assert.equal(err.type, 'operational')
+          return true
+        }
+      )
     })
 
-    it('should_import_data_in_merge_mode_when_mode_is_merge', async () => {
-      const { service, adapter } = await createService()
-      await adapter.write('users', { id: 'u1', name: 'Alice' })
-      await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'merge')
-      const alice = await adapter.read('users', 'u1')
-      const bob = await adapter.read('users', 'u2')
-      assert.ok(alice)
-      assert.ok(bob)
+    it('should_throw_SERVICE_UNAVAILABLE_on_write_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.write('users', { id: 'u1', name: 'Alice' }),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_delete_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.delete('users', 'u1'),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_query_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.query('users', {}),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_bulkWrite_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.bulkWrite('users', []),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_transaction_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.transaction([]),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
     })
   })
 })

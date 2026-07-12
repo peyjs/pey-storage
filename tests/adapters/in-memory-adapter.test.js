@@ -1,4 +1,4 @@
-import { runAdapterContractTests } from './adapter-contract.test.js'
+import { runAdapterContractTests } from './adapter-contract-tests.js'
 import InMemoryStorageAdapter from '../../adapters/in-memory-adapter.js'
 
 /** Factory that creates a fresh InMemoryStorageAdapter instance */
