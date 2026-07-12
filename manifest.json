@@ -2,7 +2,7 @@
   "name": "pey.storage",
   "version": "0.1.0",
   "architecture": "0.10",
-  "description": "IndexedDB-based storage adapter for browser-side persistence",
+  "description": "Generic storage service backed by a swappable adapter (currently IndexedDB)",
 
   "type": "infrastructure",
   "adapterType": "storage",
@@ -94,7 +94,7 @@
             { "name": "operations", "type": "Array<{ collection: string, method: string, args: Array }>" }
           ],
           "returns": "Promise<void>",
-          "errors": ["STORE_NOT_FOUND", "TRANSACTION_FAILED"]
+          "errors": ["STORE_NOT_FOUND", "QUOTA_EXCEEDED", "TRANSACTION_FAILED"]
         },
         {
           "name": "exportData",
@@ -113,7 +113,7 @@
             { "name": "mode", "type": "'replace' | 'merge'" }
           ],
           "returns": "Promise<{ imported: number, skipped: object[], errors: object[] }>",
-          "errors": ["IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND"]
+          "errors": ["IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
         }
       ]
     }
