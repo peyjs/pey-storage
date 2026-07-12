@@ -1,7 +1,7 @@
 // Entry point for the pey.storage plugin
 // Registers the storage service with the Core and manages lifecycle.
 
-import { PLUGIN_NAME, PLUGIN_VERSION, SERVICE_NAME, EVENT_READY, ERROR_CODES } from './lib/constants.js'
+import { PLUGIN_NAME, PLUGIN_VERSION, SERVICE_NAME, EVENT_READY, ERROR_CODES, ERROR_SOURCE } from './lib/constants.js'
 import { buildStartupError } from './lib/error.js'
 import StorageService from './lib/storage-service.js'
 import IndexedDBAdapter from './adapters/indexeddb-adapter.js'
@@ -34,7 +34,23 @@ export async function setup(context) {
   const service = new StorageService(adapter, storesConfig)
 
   // Open the adapter before exposing the service
-  await adapter.open(context.config)
+  // Any failure here is a startup failure — normalize to type 'startup'
+  try {
+    await adapter.open(context.config)
+  } catch (rawError) {
+    // Re-wrap with type 'startup' regardless of original error type
+    if (rawError && rawError.code && rawError.source === ERROR_SOURCE) {
+      throw {
+        ...rawError,
+        type: 'startup',
+        message: `Startup error: ${rawError.message}`,
+      }
+    }
+    throw buildStartupError(
+      ERROR_CODES.STORAGE_UNAVAILABLE,
+      'Failed to open storage adapter during startup'
+    )
+  }
 
   // Publish the ready event after successful open
   context.events.publish(EVENT_READY, {
