@@ -235,7 +235,7 @@ export default class InMemoryStorageAdapter {
 
   _requireOpen() {
     if (!this._isOpen) {
-      throw buildError(ERROR_CODES.STORE_NOT_OPENED, 'Database is not open')
+      throw buildError(ERROR_CODES.ADAPTER_NOT_OPEN, 'Database is not open')
     }
   }
 

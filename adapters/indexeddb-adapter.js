@@ -83,7 +83,7 @@ function getStore(db, storeName, mode) {
  */
 function requireOpen(db) {
   if (!db) {
-    throw buildError(ERROR_CODES.STORE_NOT_OPENED, 'Database is not open')
+    throw buildError(ERROR_CODES.ADAPTER_NOT_OPEN, 'Database is not open')
   }
 }
 
