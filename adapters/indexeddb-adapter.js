@@ -76,6 +76,17 @@ function getStore(db, storeName, mode) {
   }
 }
 
+/**
+ * Check that the database is open; throw if not.
+ *
+ * @param {IDBDatabase | null} db
+ */
+function requireOpen(db) {
+  if (!db) {
+    throw buildCriticalError(ERROR_CODES.STORAGE_UNAVAILABLE, 'Database is not open')
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Adapter class
 // ---------------------------------------------------------------------------
@@ -168,13 +179,11 @@ export default class IndexedDBAdapter {
    * @returns {Promise<object | null>}
    */
   async read(collection, key) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readonly')
     return new Promise((resolve, reject) => {
       const request = store.get(key)
-      request.onsuccess = () => {
-        resolve(request.result ?? null)
-        tx.complete
-      }
+      request.onsuccess = () => resolve(request.result ?? null)
       request.onerror = () => reject(mapError(request.error, `read[${collection}]`))
     })
   }
@@ -188,11 +197,12 @@ export default class IndexedDBAdapter {
    * @returns {Promise<void>}
    */
   async write(collection, record) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
+    store.put(record)
     return new Promise((resolve, reject) => {
-      const request = store.put(record)
-      request.onsuccess = () => { resolve() }
-      request.onerror = () => reject(mapError(request.error, `write[${collection}]`))
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(mapError(tx.error, `write[${collection}]`))
     })
   }
 
@@ -204,11 +214,12 @@ export default class IndexedDBAdapter {
    * @returns {Promise<void>}
    */
   async delete(collection, key) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
+    store.delete(key)
     return new Promise((resolve, reject) => {
-      const request = store.delete(key)
-      request.onsuccess = () => { resolve() }
-      request.onerror = () => reject(mapError(request.error, `delete[${collection}]`))
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(mapError(tx.error, `delete[${collection}]`))
     })
   }
 
@@ -221,6 +232,7 @@ export default class IndexedDBAdapter {
    * @returns {Promise<object[]>}
    */
   async query(collection, criteria = {}) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readonly')
     return new Promise((resolve, reject) => {
       const results = []
@@ -238,7 +250,6 @@ export default class IndexedDBAdapter {
         const item = cursor?.result
         if (!item) {
           resolve(results)
-          tx.complete
           return
         }
         results.push(item.value)
@@ -256,6 +267,7 @@ export default class IndexedDBAdapter {
    * @returns {Promise<number>}
    */
   async count(collection, criteria = {}) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readonly')
     return new Promise((resolve, reject) => {
       let request
@@ -267,10 +279,7 @@ export default class IndexedDBAdapter {
         request = store.count()
       }
 
-      request.onsuccess = () => {
-        resolve(request.result)
-        tx.complete
-      }
+      request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(mapError(request.error, `count[${collection}]`))
     })
   }
@@ -283,11 +292,12 @@ export default class IndexedDBAdapter {
    * @returns {Promise<void>}
    */
   async bulkWrite(collection, records) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
+    for (const record of records) {
+      store.put(record)
+    }
     return new Promise((resolve, reject) => {
-      for (const record of records) {
-        store.put(record)
-      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `bulkWrite[${collection}]`))
     })
@@ -301,11 +311,12 @@ export default class IndexedDBAdapter {
    * @returns {Promise<void>}
    */
   async bulkDelete(collection, keys) {
+    requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
+    for (const key of keys) {
+      store.delete(key)
+    }
     return new Promise((resolve, reject) => {
-      for (const key of keys) {
-        store.delete(key)
-      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `bulkDelete[${collection}]`))
     })
@@ -319,6 +330,7 @@ export default class IndexedDBAdapter {
    * @returns {Promise<void>}
    */
   async transaction(operations) {
+    requireOpen(this._db)
     const storeNames = [...new Set(operations.map(op => op.collection))]
     return new Promise((resolve, reject) => {
       let tx

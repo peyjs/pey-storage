@@ -1,9 +1,9 @@
 // In-memory storage adapter for testing
-// Implements the exact same interface as StorageAdapter
+// Implements the exact same interface as IndexedDBAdapter
 // so plugin and product logic can be tested without IndexedDB.
 
 import { ERROR_CODES } from '../lib/constants.js'
-import { buildError } from '../lib/error.js'
+import { buildError, buildCriticalError } from '../lib/error.js'
 
 /**
  * A simple key-value store backed by a Map.
@@ -51,6 +51,25 @@ class InMemoryStore {
   deleteAll() {
     this._data.clear()
   }
+
+  /**
+   * Create a deep snapshot of the current data.
+   * Used for transaction rollback on failure.
+   *
+   * @returns {Map<string | number, object>}
+   */
+  snapshot() {
+    return new Map(this._data)
+  }
+
+  /**
+   * Restore data from a snapshot.
+   *
+   * @param {Map<string | number, object>} snap
+   */
+  restore(snap) {
+    this._data = snap
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -58,16 +77,25 @@ class InMemoryStore {
 // ---------------------------------------------------------------------------
 
 /**
- * In-memory substitute for StorageAdapter.
+ * In-memory substitute for IndexedDBAdapter.
  * Uses the same public method names and return types.
+ *
+ * Transaction implements rollback-on-failure semantics
+ * matching IndexedDB transaction behavior.
  */
 export default class InMemoryStorageAdapter {
   constructor() {
     /** @type {Map<string, InMemoryStore>} */
     this._stores = new Map()
+    /** @type {boolean} */
     this._isOpen = false
   }
 
+  /**
+   * @param {object} config
+   * @param {Array}  [config.stores]
+   * @returns {Promise<void>}
+   */
   async open(config = {}) {
     if (this._isOpen) return
     const storesConfig = config.stores || []
@@ -90,21 +118,25 @@ export default class InMemoryStorageAdapter {
   // --- Core primitives ---
 
   async read(collection, key) {
+    this._requireOpen()
     const store = this._getStore(collection)
     return store.get(key)
   }
 
   async write(collection, record) {
+    this._requireOpen()
     const store = this._getStore(collection)
     store.put(record)
   }
 
   async delete(collection, key) {
+    this._requireOpen()
     const store = this._getStore(collection)
     store.delete(key)
   }
 
   async query(collection, criteria = {}) {
+    this._requireOpen()
     const store = this._getStore(collection)
     const all = store.getAll()
     if (Object.keys(criteria).length === 0) return all
@@ -113,6 +145,7 @@ export default class InMemoryStorageAdapter {
   }
 
   async count(collection, criteria = {}) {
+    this._requireOpen()
     const store = this._getStore(collection)
     const all = store.getAll()
     if (Object.keys(criteria).length === 0) return store.count()
@@ -121,6 +154,7 @@ export default class InMemoryStorageAdapter {
   }
 
   async bulkWrite(collection, records) {
+    this._requireOpen()
     const store = this._getStore(collection)
     for (const record of records) {
       store.put(record)
@@ -128,29 +162,80 @@ export default class InMemoryStorageAdapter {
   }
 
   async bulkDelete(collection, keys) {
+    this._requireOpen()
     const store = this._getStore(collection)
     for (const key of keys) {
       store.delete(key)
     }
   }
 
+  /**
+   * Execute operations atomically with rollback-on-failure semantics.
+   * All changes are staged on a snapshot and committed only on success.
+   *
+   * @param {object[]} operations
+   * @returns {Promise<void>}
+   */
   async transaction(operations) {
+    this._requireOpen()
+
+    // Take snapshots of every affected store
+    const storeNames = [...new Set(operations.map(op => op.collection))]
+    const snapshots = new Map()
+    for (const name of storeNames) {
+      const store = this._stores.get(name)
+      snapshots.set(name, store.snapshot())
+    }
+
+    // Apply operations to a copy of each store
+    const tempStores = new Map()
+    for (const name of storeNames) {
+      const tempStore = new InMemoryStore({
+        keyPath: this._stores.get(name).keyPath,
+        autoIncrement: this._stores.get(name).autoIncrement,
+      })
+      tempStore.restore(this._stores.get(name).snapshot())
+      tempStores.set(name, tempStore)
+    }
+
+    let errorCaught = null
+
     for (const op of operations) {
-      const store = this._getStore(op.collection)
-      switch (op.method) {
-        case 'put':
-          store.put(op.record)
-          break
-        case 'delete':
-          store.delete(op.key)
-          break
-        default:
-          throw buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`)
+      const store = tempStores.get(op.collection)
+      try {
+        switch (op.method) {
+          case 'put':
+            store.put(op.record)
+            break
+          case 'delete':
+            store.delete(op.key)
+            break
+          default:
+            errorCaught = buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`)
+        }
+      } catch (rawError) {
+        errorCaught = rawError
       }
+    }
+
+    if (errorCaught) {
+      // Rollback: discard temp stores, originals are untouched
+      throw errorCaught
+    }
+
+    // Commit: replace originals with committed state
+    for (const name of storeNames) {
+      this._stores.get(name).restore(tempStores.get(name).snapshot())
     }
   }
 
   // --- Internal ---
+
+  _requireOpen() {
+    if (!this._isOpen) {
+      throw buildCriticalError(ERROR_CODES.STORAGE_UNAVAILABLE, 'Database is not open')
+    }
+  }
 
   _getStore(name) {
     const store = this._stores.get(name)
