@@ -3,7 +3,7 @@
 // so plugin and product logic can be tested without IndexedDB.
 
 import { ERROR_CODES } from '../lib/constants.js'
-import { buildError, buildCriticalError } from '../lib/error.js'
+import { buildError } from '../lib/error.js'
 
 /**
  * A simple key-value store backed by a Map.
@@ -56,19 +56,20 @@ class InMemoryStore {
    * Create a deep snapshot of the current data.
    * Used for transaction rollback on failure.
    *
-   * @returns {Map<string | number, object>}
+   * @returns {{ data: Map<string | number, object>, nextId: number }}
    */
   snapshot() {
-    return new Map(this._data)
+    return { data: new Map(this._data), nextId: this._nextId }
   }
 
   /**
-   * Restore data from a snapshot.
+   * Restore data and _nextId from a snapshot.
    *
-   * @param {Map<string | number, object>} snap
+   * @param {{ data: Map<string | number, object>, nextId: number }} snap
    */
   restore(snap) {
-    this._data = snap
+    this._data = snap.data
+    this._nextId = snap.nextId
   }
 }
 
@@ -183,18 +184,19 @@ export default class InMemoryStorageAdapter {
     const storeNames = [...new Set(operations.map(op => op.collection))]
     const snapshots = new Map()
     for (const name of storeNames) {
-      const store = this._stores.get(name)
+      const store = this._getStore(name)
       snapshots.set(name, store.snapshot())
     }
 
     // Apply operations to a copy of each store
     const tempStores = new Map()
     for (const name of storeNames) {
+      const sourceStore = this._getStore(name)
       const tempStore = new InMemoryStore({
-        keyPath: this._stores.get(name).keyPath,
-        autoIncrement: this._stores.get(name).autoIncrement,
+        keyPath: sourceStore.keyPath,
+        autoIncrement: sourceStore.autoIncrement,
       })
-      tempStore.restore(this._stores.get(name).snapshot())
+      tempStore.restore(sourceStore.snapshot())
       tempStores.set(name, tempStore)
     }
 
@@ -225,7 +227,7 @@ export default class InMemoryStorageAdapter {
 
     // Commit: replace originals with committed state
     for (const name of storeNames) {
-      this._stores.get(name).restore(tempStores.get(name).snapshot())
+      this._getStore(name).restore(tempStores.get(name).snapshot())
     }
   }
 
@@ -233,7 +235,7 @@ export default class InMemoryStorageAdapter {
 
   _requireOpen() {
     if (!this._isOpen) {
-      throw buildCriticalError(ERROR_CODES.STORAGE_UNAVAILABLE, 'Database is not open')
+      throw buildError(ERROR_CODES.STORE_NOT_OPENED, 'Database is not open')
     }
   }
 
