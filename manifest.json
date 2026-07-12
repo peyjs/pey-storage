@@ -1,0 +1,138 @@
+{
+  "name": "pey.storage",
+  "version": "0.1.0",
+  "architecture": "0.10",
+  "description": "IndexedDB-based storage adapter for browser-side persistence",
+
+  "type": "infrastructure",
+  "adapterType": "storage",
+
+  "dependencies": {
+    "required": [],
+    "optional": []
+  },
+
+  "provides": [
+    {
+      "name": "pey.storage.service",
+      "description": "Generic key-value and record storage with CRUD, query, bulk, transaction, and import/export capabilities",
+      "methods": [
+        {
+          "name": "read",
+          "description": "Read a single record by key from a collection",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "key", "type": "string | number" }
+          ],
+          "returns": "Promise<object | null>",
+          "errors": ["STORE_NOT_FOUND", "RECORD_NOT_FOUND"]
+        },
+        {
+          "name": "write",
+          "description": "Write (insert or update) a single record",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "record", "type": "object" }
+          ],
+          "returns": "Promise<void>",
+          "errors": ["STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
+        },
+        {
+          "name": "delete",
+          "description": "Delete a single record by key",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "key", "type": "string | number" }
+          ],
+          "returns": "Promise<void>",
+          "errors": ["STORE_NOT_FOUND"]
+        },
+        {
+          "name": "query",
+          "description": "Query records with a raw index/range criteria",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "criteria", "type": "object" }
+          ],
+          "returns": "Promise<object[]>",
+          "errors": ["STORE_NOT_FOUND"]
+        },
+        {
+          "name": "count",
+          "description": "Count records, optionally filtered by raw query criteria",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "criteria", "type": "object" }
+          ],
+          "returns": "Promise<number>",
+          "errors": ["STORE_NOT_FOUND"]
+        },
+        {
+          "name": "bulkWrite",
+          "description": "Bulk insert or update multiple records atomically",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "records", "type": "object[]" }
+          ],
+          "returns": "Promise<void>",
+          "errors": ["STORE_NOT_FOUND", "QUOTA_EXCEEDED"]
+        },
+        {
+          "name": "bulkDelete",
+          "description": "Bulk delete multiple records atomically",
+          "params": [
+            { "name": "collection", "type": "string" },
+            { "name": "keys", "type": "(string | number)[]" }
+          ],
+          "returns": "Promise<void>",
+          "errors": ["STORE_NOT_FOUND"]
+        },
+        {
+          "name": "transaction",
+          "description": "Run multiple raw operations atomically",
+          "params": [
+            { "name": "operations", "type": "Array<{ collection: string, method: string, args: Array }>" }
+          ],
+          "returns": "Promise<void>",
+          "errors": ["STORE_NOT_FOUND", "TRANSACTION_FAILED"]
+        },
+        {
+          "name": "exportData",
+          "description": "Export records as a JSON-compatible payload with metadata",
+          "params": [
+            { "name": "collections", "type": "string[] | null" }
+          ],
+          "returns": "Promise<{ metadata: object, data: object }>",
+          "errors": ["STORE_NOT_FOUND"]
+        },
+        {
+          "name": "importData",
+          "description": "Import a previously exported payload with replace or merge mode",
+          "params": [
+            { "name": "payload", "type": "object" },
+            { "name": "mode", "type": "'replace' | 'merge'" }
+          ],
+          "returns": "Promise<{ imported: number, skipped: object[], errors: object[] }>",
+          "errors": ["IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND"]
+        }
+      ]
+    }
+  ],
+
+  "events": [
+    {
+      "name": "storage:ready",
+      "description": "Published after all configured stores have been created or migrated and the database is fully operational",
+      "data": [
+        { "name": "version", "type": "string" },
+        { "name": "stores", "type": "string[]" }
+      ]
+    }
+  ],
+
+  "config": {
+    "databaseName": "pey-app-db",
+    "schemaVersion": 1,
+    "stores": []
+  }
+}
