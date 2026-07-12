@@ -38,9 +38,15 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.equal(record, null)
       })
 
-      it('should_allow_read_operation_with_empty_stores_config', async () => {
+      it('should_throw_STORE_NOT_FOUND_on_read_when_no_stores_are_configured', async () => {
         await adapter.open({ stores: [] })
-        assert.equal(adapter._stores.size, 0)
+        await assert.rejects(
+          adapter.read('users', 'x'),
+          (err) => {
+            assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+            return true
+          }
+        )
       })
     })
 
@@ -85,7 +91,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u1', name: 'Alice' })
       })
 
-      it('should_return_record_when_key_exists', async () => {
+      it('should_return_record_when_key_exists_for_read', async () => {
         const record = await adapter.read('users', 'u1')
         assert.deepEqual(record, { id: 'u1', name: 'Alice' })
       })
@@ -142,7 +148,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.deepEqual(record, { id: 'u1', name: 'Alice Updated' })
       })
 
-      it('should_return_undefined', async () => {
+      it('should_return_undefined_when_record_is_written_successfully', async () => {
         const result = await adapter.write('users', { id: 'u3', name: 'Charlie' })
         assert.equal(result, undefined)
       })
@@ -166,14 +172,14 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u1', name: 'Alice' })
       })
 
-      it('should_delete_existing_record_and_return_undefined', async () => {
+      it('should_delete_existing_record_and_return_undefined_when_key_exists', async () => {
         const result = await adapter.delete('users', 'u1')
         assert.equal(result, undefined)
         const record = await adapter.read('users', 'u1')
         assert.equal(record, null)
       })
 
-      it('should_return_undefined_when_key_does_not_exist', async () => {
+      it('should_return_undefined_when_key_does_not_exist_for_delete', async () => {
         const result = await adapter.delete('users', 'nonexistent')
         assert.equal(result, undefined)
       })
@@ -185,7 +191,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.open({ stores: VALID_STORES_CONFIG })
       })
 
-      it('should_write_multiple_records', async () => {
+      it('should_write_multiple_records_when_array_is_provided', async () => {
         const records = [
           { id: 'u1', name: 'Alice' },
           { id: 'u2', name: 'Bob' },
@@ -197,7 +203,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.deepEqual(r2, { id: 'u2', name: 'Bob' })
       })
 
-      it('should_return_undefined', async () => {
+      it('should_return_undefined_when_bulk_write_succeeds', async () => {
         const records = [
           { id: 'u1', name: 'Alice' },
           { id: 'u2', name: 'Bob' },
@@ -215,7 +221,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u2', name: 'Bob' })
       })
 
-      it('should_delete_multiple_records_and_return_undefined', async () => {
+      it('should_delete_multiple_records_and_return_undefined_when_keys_exist', async () => {
         const results = await adapter.bulkDelete('users', ['u1', 'u2'])
         assert.equal(results, undefined)
         const r1 = await adapter.read('users', 'u1')
@@ -224,7 +230,7 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.equal(r2, null)
       })
 
-      it('should_return_undefined_when_keys_do_not_exist', async () => {
+      it('should_return_undefined_when_some_keys_do_not_exist_for_bulk_delete', async () => {
         const results = await adapter.bulkDelete('users', ['u1', 'nonexistent'])
         assert.equal(results, undefined)
       })
@@ -239,18 +245,18 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u3', name: 'Charlie' })
       })
 
-      it('should_return_all_records_when_no_filter_is_provided', async () => {
+      it('should_return_all_records_when_no_filter_is_provided_to_query', async () => {
         const results = await adapter.query('users')
         assert.equal(results.length, 3)
       })
 
-      it('should_return_matching_records_when_filter_is_provided', async () => {
+      it('should_return_matching_records_when_filter_is_provided_to_query', async () => {
         const results = await adapter.query('users', { name: 'Alice' })
         assert.equal(results.length, 1)
         assert.equal(results[0].name, 'Alice')
       })
 
-      it('should_return_empty_array_when_no_records_match_filter', async () => {
+      it('should_return_empty_array_when_no_records_match_filter_in_query', async () => {
         const results = await adapter.query('users', { name: 'Zebra' })
         assert.equal(results.length, 0)
       })
@@ -264,19 +270,19 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         await adapter.write('users', { id: 'u2', name: 'Bob' })
       })
 
-      it('should_return_total_count', async () => {
+      it('should_return_total_count_when_records_exist', async () => {
         const count = await adapter.count('users')
         assert.equal(count, 2)
       })
 
-      it('should_return_zero_when_store_is_empty', async () => {
+      it('should_return_zero_when_store_has_no_records', async () => {
         adapter = createAdapter()
         await adapter.open({ stores: VALID_STORES_CONFIG })
         const count = await adapter.count('users')
         assert.equal(count, 0)
       })
 
-      it('should_return_matching_count_when_filter_is_provided', async () => {
+      it('should_return_matching_count_when_filter_is_provided_to_count', async () => {
         const count = await adapter.count('users', { name: 'Alice' })
         assert.equal(count, 1)
       })
@@ -296,18 +302,20 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         assert.deepEqual(record, { id: 'u1', name: 'Alice' })
       })
 
-      it('should_rollback_writes_when_invalid_method_is_provided', async () => {
+      it('should_throw_error_and_rollback_writes_when_invalid_method_is_provided', async () => {
         await adapter.transaction([
           { method: 'put', collection: 'users', record: { id: 'u1', name: 'Alice' } },
         ])
-        try {
-          await adapter.transaction([
+        await assert.rejects(
+          adapter.transaction([
             { method: 'put', collection: 'users', record: { id: 'u2', name: 'Bob' } },
             { method: 'invalid_method', collection: 'users', record: { id: 'u3', name: 'Fail' } },
-          ])
-        } catch {
-          // expected
-        }
+          ]),
+          (err) => {
+            assert.ok(err)
+            return true
+          }
+        )
         const record = await adapter.read('users', 'u2')
         assert.equal(record, null)
       })

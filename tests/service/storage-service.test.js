@@ -368,5 +368,29 @@ describe('StorageService', () => {
         }
       )
     })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_exportData_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.exportData(),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
+
+    it('should_throw_SERVICE_UNAVAILABLE_on_importData_after_deactivation', async () => {
+      const { service } = await createService()
+      service._setDeactivated()
+      await assert.rejects(
+        service.importData({ data: {} }),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+          return true
+        }
+      )
+    })
   })
 })
