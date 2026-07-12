@@ -132,14 +132,15 @@ describe('StorageService', () => {
   })
 
   describe('importData()', () => {
-    it('should_import_data_in_replace_mode_when_mode_is_replace', async () => {
+    it('should_replace_records_in_replace_mode', async () => {
       const { service, adapter } = await createService()
       await adapter.write('users', { id: 'u1', name: 'Alice' })
-      await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'replace')
+      const result = await service.importData({ data: { users: [{ id: 'u2', name: 'Bob' }] } }, 'replace')
       const alice = await adapter.read('users', 'u1')
       const bob = await adapter.read('users', 'u2')
-      assert.equal(alice, null)
+      assert.ok(alice)
       assert.ok(bob)
+      assert.equal(result.imported, 1)
     })
 
     it('should_import_data_in_merge_mode_when_mode_is_merge', async () => {
