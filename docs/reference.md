@@ -151,6 +151,10 @@ const result = await service.importData(
 
 ## Config
 
+The adapter name is configured in `bootstrap.json` → `adapters.storage` and delivered to the plugin as `context.config.adapter`. It is resolved by the Core, not declared in the plugin's own config. Plugin-level config lives under `config.<pluginName>` in `bootstrap.json` (the `plugins` array entry only holds `name`, `version`, and `path`).
+
+Plugin-level config includes:
+
 | Key | Type | Required | Default |
 |---|---|---|---|
 | `databaseName` | string | No | `pey-app-db` |
