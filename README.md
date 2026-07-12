@@ -19,7 +19,7 @@ Register the adapter and plugin in `bootstrap.json`:
     {
       "name": "pey.storage",
       "version": "0.1.0",
-      "path": "plugins/indexedDB"
+      "path": "plugins/pey.storage"
     }
   ],
   "config": {
