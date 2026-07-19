@@ -9,7 +9,7 @@ Generic key-value storage plugin backed by a swappable adapter (currently Indexe
 ```
 pey.storage/
 ├── manifest.json          — Plugin identity, provides, events, config
-├── index.js               — Entry point: setup(), lifecycle hooks, service registration
+├── index.js               — Entry point: prepare(), activate(), lifecycle hooks, service registration
 ├── lib/
 │   ├── constants.js       — Plugin name, version, error codes, event names, export format version
 │   ├── error.js           — Standard Bonyan error builders (buildError, buildStartupError, buildCriticalError, mapError)
@@ -28,6 +28,15 @@ pey.storage/
 ## Dependencies
 
 No required or optional dependencies. This is the first plugin in startup order and has no service dependencies.
+
+## Lifecycle
+
+Per Bonyan architecture `0.11`, the entry point is split into two phases:
+
+- **`prepare(prepareContext)`** — resolves the storage adapter by `prepareContext.config.adapter`, instantiates the adapter and the `StorageService`, opens the adapter with an assembled adapter-scoped config (plugin-owned `databaseName` / `schemaVersion` / `stores` from `manifest.config`, merged with any `prepareContext.config.adapterConfig` overrides), assigns `onShutdown` / `onDeactivated` to the **same** `prepareContext` object (so resources opened here are reclaimed even if `activate()` never runs — e.g. `ACTIVATION_FAILED` or settlement skip), and returns `[{ name: SERVICE_NAME, object: service }]`. Any failure here is a startup failure: structured errors are re-thrown with `type: 'startup'`, unstructured errors are wrapped via `buildStartupError(STORAGE_UNAVAILABLE)`.
+- **`activate(_services)`** — receives only `services` (this plugin declares no dependencies and therefore does not read any key from it). Reads `events` and `storesConfig` from the module-level closure saved during `prepare()`, and publishes `storage:ready` exactly once with `{ version, stores: storesConfig.map(s => s.name) }`. Lifecycle hooks are *not* assigned here — see `prepare()`. 
+
+The Core guarantees that `prepareContext` is the same object reference across both phases, so saving it in `prepare()` and reading back in `activate()` is safe.
 
 ## Public API
 
@@ -143,15 +152,16 @@ const result = await service.importData(
 | `STORE_NOT_FOUND` | operational | Collection/store name is not in the configured stores list (read, write, delete, query, count, bulkWrite, bulkDelete, transaction, importData) |
 | `RECORD_NOT_FOUND` | operational | Record not found by key (read) |
 | `ADAPTER_NOT_OPEN` | operational | Adapter has been closed or destroyed; any operation after that fails |
+| `ADAPTER_NOT_CONFIGURED` | startup | The adapter identifier in `prepareContext.config.adapter` is not found in the plugin's `ADAPTERS` map during `prepare()` — e.g. an unknown adapter name was supplied through `bootstrap.json` under `adapters.storage` |
 | `QUOTA_EXCEEDED` | operational | Storage quota exceeded (write, bulkWrite, transaction) |
-| `STORAGE_UNAVAILABLE` | critical / startup | Thrown by the adapter as `critical` when IndexedDB is unavailable (private browsing, disabled). When this error surfaces through `setup()` during plugin startup, it is re-wrapped as `startup` type (see `index.js`). |
+| `STORAGE_UNAVAILABLE` | critical / startup | Thrown by the adapter as `critical` when IndexedDB is unavailable (private browsing, disabled). When this error surfaces through `prepare()` during plugin startup, it is re-wrapped as `startup` type (see `index.js`). |
 | `TRANSACTION_FAILED` | operational | A transaction operation fails (invalid method, constraint violation) |
 | `IMPORT_INVALID_PAYLOAD` | operational | Import payload is null, not an object, or missing the `data` property |
 | `SERVICE_UNAVAILABLE` | operational | Storage service has been deactivated (any method) |
 
 ## Config
 
-The adapter name is configured in `bootstrap.json` → `adapters.storage` and delivered to the plugin as `context.config.adapter`. It is resolved by the Core, not declared in the plugin's own config. Plugin-level config lives under `config.<pluginName>` in `bootstrap.json` (the `plugins` array entry only holds `name`, `version`, and `path`).
+The adapter name is configured in `bootstrap.json` → `adapters.storage` and delivered to the plugin as `prepareContext.config.adapter`. It is resolved by the Core, not declared in the plugin's own config. Plugin-level config lives under `config.<pluginName>` in `bootstrap.json` (the `plugins` array entry only holds `name`, `version`, and `path`).
 
 Plugin-level config includes:
 
@@ -177,7 +187,7 @@ Each store entry in `stores` requires:
 3. **Import merge mode:** Each record is checked individually. If the key already exists, the record is skipped and added to `result.skipped`. If the key is new, it is inserted and counted in `result.imported`. Records without a valid key (undefined/null) are added to `result.errors`. Merge is not fully atomic — each record is read before the decision to write or skip.
 4. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
 5. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
-6. **Encryption:** No-op in v0.1.0. The design allows future transparent encryption without contract change.
+6. **Encryption:** No-op in v0.2.0. The design allows future transparent encryption without contract change.
 7. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
 
 ## Constraints

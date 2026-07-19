@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-07-19
+
+### Changed
+- Migrated entry point from single-phase `setup(context)` to the two-phase `prepare(prepareContext)` / `activate(services)` lifecycle per Bonyan architecture `0.11`.
+- Manifest `architecture` bumped from `0.10` to `0.11`; `version` bumped from `0.1.0` to `0.2.0`. The consumer-facing contract (provides / events / dependencies / config) is unchanged.
+- Module-level closure (`savedContext`, `storesConfig`, `adapterRef`, `serviceRef`) introduced so `activate()` — which receives only `services` — can read config, events, and store names without dipping into `StorageService` internals.
+- The adapter-scoped config passed to `adapter.open(...)` is now assembled explicitly from plugin-owned `databaseName` / `schemaVersion` / `stores` merged with Core-injected `prepareContext.config.adapterConfig` (extended bootstrap form only). The whole `prepareContext.config` is no longer passed through to the adapter.
+- Lifecycle hooks (`onShutdown` / `onDeactivated`) are now assigned in `prepare()` immediately after `adapter.open(...)`, rather than in `activate()`. This prevents an open adapter from leaking if `activate()` never runs (e.g. `ACTIVATION_FAILED` or settlement skip).
+
+### Removed
+- The `setup()` export. It is not aliased — consumers and tests must call `prepare()` then `activate({})` instead.
+
+### Added
+- `tests/entry.test.js` — 16 tests covering `prepare()` (`success` / `unknown adapter identifier` / `adapter config assembly (simple + extended form)` / `adapter.open() failures (unstructured + structured)` / `lifecycle hooks assigned in prepare phase, including without activate`) and `activate()` (publishes `storage:ready` once with version + stores; ignores unexpected `services` keys via Proxy trap). Uses `node:test`'s `mock.module` (`--experimental-test-module-mocks` flag added to `npm test`).
+
+### Documentation
+- `README.md` and `docs/reference.md` updated to reflect the two-phase entry point, the `prepareContext.config.adapter` injection path, and the `0.2.0` / `0.11` version pair. `docs/reference.md` gains a new `## Lifecycle` section.
+
 ## [0.1.0] — 2026-07-12
 
 ### Added

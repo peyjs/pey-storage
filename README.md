@@ -1,5 +1,10 @@
 # pey.storage
 
+[![AI](https://img.shields.io/badge/Built%20with-AI-blueviolet)](#)
+[![version](https://img.shields.io/badge/version-0.2.0-blue.svg)](#)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Bonyan Architecture](https://img.shields.io/badge/bonyan-0.11-56c3bf)](https://github.com/barnevis/bonyan)
+
 Generic key-value storage plugin backed by a swappable adapter (currently IndexedDB).
 
 ## Purpose
@@ -18,7 +23,7 @@ Register the adapter and plugin in `bootstrap.json`:
   "plugins": [
     {
       "name": "pey.storage",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "path": "plugins/pey.storage"
     }
   ],
@@ -43,7 +48,7 @@ await service.write('users', { id: 'u1', name: 'Alice' })
 
 ## Configuration
 
-The active adapter name is set in `bootstrap.json` under `adapters.storage` and reaches the plugin as `context.config.adapter`. Plugin configuration is declared under `config.<pluginName>` (not inside the `plugins` array entry — that section only holds `name`, `version`, and `path`).
+The active adapter name is set in `bootstrap.json` under `adapters.storage` and reaches the plugin as `prepareContext.config.adapter`. Plugin configuration is declared under `config.<pluginName>` (not inside the `plugins` array entry — that section only holds `name`, `version`, and `path`).
 
 Plugin-level config only includes:
 
@@ -64,7 +69,7 @@ Each store entry requires:
 ```
 pey.storage/
 ├── manifest.json          — Plugin identity, provides, events, config
-├── index.js               — Entry point: setup(), lifecycle hooks
+├── index.js               — Entry point: prepare(), activate(), lifecycle hooks
 ├── lib/
 │   ├── constants.js       — Plugin name, version, error codes
 │   ├── error.js           — Error builders
