@@ -149,13 +149,16 @@ describe('pey.storage entry point', () => {
       assert.equal(ctx.events.published.length, 0)
     })
 
-    it('should_not_assign_lifecycle_hooks_during_prepare_when_only_prepare_runs', async () => {
+    it('should_assign_lifecycle_hooks_when_prepare_succeeds', async () => {
       const ctx = createPrepareContext()
 
       await prepare(ctx)
 
-      assert.equal(ctx.onShutdown, null)
-      assert.equal(ctx.onDeactivated, null)
+      // Hooks are assigned in prepare(), not activate(), so resources opened in
+      // prepare() are reclaimed even if activate() never runs (e.g. the plugin
+      // is skipped at settlement or activate() throws ACTIVATION_FAILED).
+      assert.equal(typeof ctx.onShutdown, 'function')
+      assert.equal(typeof ctx.onDeactivated, 'function')
     })
   })
 
@@ -237,7 +240,48 @@ describe('pey.storage entry point', () => {
     })
   })
 
-  describe('activate() — success path', () => {
+  describe('prepare() — lifecycle hooks assigned in prepare phase', () => {
+    it('should_close_adapter_when_onShutdown_runs_without_activate', async () => {
+      const ctx = createPrepareContext()
+      await prepare(ctx)
+      const fakeAdapter = FakeAdapter.lastInstance
+
+      // activate() is intentionally NOT called — onShutdown must still close
+      // the adapter, since hooks are wired in prepare().
+      await ctx.onShutdown()
+
+      assert.equal(fakeAdapter.closeCalls, 1)
+    })
+
+    it('should_close_adapter_when_onDeactivated_runs_without_activate', async () => {
+      const ctx = createPrepareContext()
+      await prepare(ctx)
+      const fakeAdapter = FakeAdapter.lastInstance
+
+      await ctx.onDeactivated()
+
+      assert.equal(fakeAdapter.closeCalls, 1)
+    })
+
+    it('should_make_service_throw_SERVICE_UNAVAILABLE_when_read_called_after_onShutdown_without_activate', async () => {
+      const ctx = createPrepareContext()
+      const services = await prepare(ctx)
+      const service = services[0].object
+
+      await ctx.onShutdown()
+
+      // Manifest-visible behavior: read() must reject with SERVICE_UNAVAILABLE
+      // after deactivate, instead of executing. This exercises _setDeactivated()
+      // without reaching into internals. activate() is not called — hooks must
+      // work without it.
+      await assert.rejects(service.read('users', 'u1'), (err) => {
+        assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
+        return true
+      })
+    })
+  })
+
+  describe('activate() — publishes ready event', () => {
     it('should_publish_storage_ready_once_with_version_and_stores_when_called_after_prepare_succeeds', async () => {
       const ctx = createPrepareContext()
       await prepare(ctx)
@@ -251,77 +295,24 @@ describe('pey.storage entry point', () => {
       assert.deepEqual(evt.data.stores, ['users'])
     })
 
-    it('should_assign_onShutdown_and_onDeactivated_functions_when_called_after_prepare_succeeds', async () => {
-      const ctx = createPrepareContext()
-      await prepare(ctx)
-
-      await activate({})
-
-      assert.equal(typeof ctx.onShutdown, 'function')
-      assert.equal(typeof ctx.onDeactivated, 'function')
-    })
-
-    it('should_close_adapter_when_onShutdown_runs_after_activate', async () => {
-      const ctx = createPrepareContext()
-      await prepare(ctx)
-      const fakeAdapter = FakeAdapter.lastInstance
-
-      await activate({})
-      await ctx.onShutdown()
-
-      assert.equal(fakeAdapter.closeCalls, 1)
-    })
-
-    it('should_close_adapter_when_onDeactivated_runs_after_activate', async () => {
-      const ctx = createPrepareContext()
-      await prepare(ctx)
-      const fakeAdapter = FakeAdapter.lastInstance
-
-      await activate({})
-      await ctx.onDeactivated()
-
-      assert.equal(fakeAdapter.closeCalls, 1)
-    })
-
-    it('should_make_service_throws_SERVICE_UNAVAILABLE_when_read_called_after_onShutdown', async () => {
-      const ctx = createPrepareContext()
-      const services = await prepare(ctx)
-      const service = services[0].object
-
-      await activate({})
-      await ctx.onShutdown()
-
-      // Manifest-visible behavior: read() must reject with SERVICE_UNAVAILABLE
-      // after deactivate, instead of executing. This exercises _setDeactivated()
-      // without reaching into internals.
-      await assert.rejects(service.read('users', 'u1'), (err) => {
-        assert.equal(err.code, ERROR_CODES.SERVICE_UNAVAILABLE)
-        return true
-      })
-    })
-  })
-
-  describe('activate() — does not read from services', () => {
+    // Guards against architecture drift: activate(services) must not read from
+    // `services`. A Proxy trap as `services` would throw if any property were
+    // accessed during activate(); the publish path only uses the closure-saved
+    // prepareContext (events/storesConfig), never `services` directly.
     it('should_ignore_unexpected_service_keys_when_activate_runs', async () => {
       const ctx = createPrepareContext()
       await prepare(ctx)
 
-      // Inject a Proxy that records any property access. activate() must
-      // touch none of them — it declares no dependency.
-      let unexpectedAccess = null
-      const trapServices = new Proxy({
-        'vendor.unrelated.service': { method: () => {} },
-      }, {
-        get(target, prop) {
-          unexpectedAccess = prop
-          return target[prop]
+      const trappedServices = new Proxy({}, {
+        get(_t, prop) {
+          throw new Error(`activate() must not read services.${String(prop)}`)
         },
       })
 
-      await activate(trapServices)
+      await activate(trappedServices)
 
-      assert.equal(unexpectedAccess, null,
-        'activate() must not access any key on services')
+      assert.equal(ctx.events.published.length, 1)
+      assert.equal(ctx.events.published[0].type, 'storage:ready')
     })
   })
 

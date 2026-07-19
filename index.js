@@ -96,6 +96,23 @@ export async function prepare(prepareContext) {
   adapterRef = adapter
   serviceRef = service
 
+  // Assign lifecycle hooks here (in prepare) rather than in activate(). The
+  // Core allows either phase (core-api-reference.md: "either phase is fine,
+  // since savedContext is the same object either way"), but if activation
+  // fails for any reason — ACTIVATION_FAILED, or the plugin being skipped at
+  // settlement — activate() may never run, and an adapter that's already open
+  // would otherwise leak with no onShutdown to close it. Wiring the hooks as
+  // soon as the resources they clean up exist is the safer default.
+  savedContext.onShutdown = async () => {
+    await adapterRef.close()
+    serviceRef._setDeactivated()
+  }
+
+  savedContext.onDeactivated = async () => {
+    await adapterRef.close()
+    serviceRef._setDeactivated()
+  }
+
   return [
     { name: SERVICE_NAME, object: service },
   ]
@@ -109,7 +126,11 @@ export async function prepare(prepareContext) {
  * in prepare(). This plugin declares no required/optional dependency, so
  * `services` is intentionally ignored — do not read any key from it.
  *
- * @param {object} services — resolved declared dependencies (none for this plugin)
+ * Lifecycle hooks (onShutdown / onDeactivated) are assigned in prepare(),
+ * not here, so that resources opened in prepare() are cleaned up even if
+ * activate() never runs.
+ *
+ * @param {object} _services — resolved declared dependencies (none for this plugin)
  * @returns {Promise<void>}
  */
 export async function activate(_services) {
@@ -120,15 +141,4 @@ export async function activate(_services) {
     version: PLUGIN_VERSION,
     stores: storesConfig.map(s => s.name),
   })
-
-  // Lifecycle hooks
-  savedContext.onShutdown = async () => {
-    await adapterRef.close()
-    serviceRef._setDeactivated()
-  }
-
-  savedContext.onDeactivated = async () => {
-    await adapterRef.close()
-    serviceRef._setDeactivated()
-  }
 }
