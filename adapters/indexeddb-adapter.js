@@ -293,7 +293,8 @@ export default class IndexedDBAdapter {
         try {
           index = store.index(indexName)
         } catch (rawError) {
-          throw mapError(rawError, `query[${collection}] index=${indexName}`)
+          reject(mapError(rawError, `query[${collection}] index=${indexName}`))
+          return
         }
         cursor = index.openCursor(buildKeyRange(criteriaValue))
       } else {
@@ -340,7 +341,8 @@ export default class IndexedDBAdapter {
         try {
           index = store.index(indexName)
         } catch (rawError) {
-          throw mapError(rawError, `count[${collection}] index=${indexName}`)
+          reject(mapError(rawError, `count[${collection}] index=${indexName}`))
+          return
         }
         request = index.count(buildKeyRange(criteriaValue))
       } else {
