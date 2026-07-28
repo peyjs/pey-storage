@@ -4,7 +4,12 @@ import InMemoryStorageAdapter from '../../adapters/in-memory-adapter.js'
 import { ERROR_CODES } from '../../lib/constants.js'
 
 const VALID_STORES_CONFIG = [
-  { name: 'users', keyPath: 'id', autoIncrement: false },
+  {
+    name: 'users',
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: [{ name: 'ageIdx', field: 'age', unique: false }],
+  },
 ]
 
 /**
@@ -285,6 +290,114 @@ export function runAdapterContractTests(adapterName, createAdapter) {
       it('should_return_matching_count_when_filter_is_provided_to_count', async () => {
         const count = await adapter.count('users', { name: 'Alice' })
         assert.equal(count, 1)
+      })
+    })
+
+    // ------------------------------------------------------------------
+    // Range query tests — shared across all adapter implementations
+    // ------------------------------------------------------------------
+
+    describe('query() — range criteria', () => {
+      beforeEach(async () => {
+        adapter = createAdapter()
+        await adapter.open({ stores: VALID_STORES_CONFIG })
+        await adapter.write('users', { id: 'u1', name: 'Alice', age: 20 })
+        await adapter.write('users', { id: 'u2', name: 'Bob', age: 25 })
+        await adapter.write('users', { id: 'u3', name: 'Charlie', age: 30 })
+      })
+
+      it('should_return_records_within_gte_lte_range', async () => {
+        const results = await adapter.query('users', { ageIdx: { gte: 20, lte: 25 } })
+        assert.equal(results.length, 2)
+        assert.ok(results.some(r => r.name === 'Alice'))
+        assert.ok(results.some(r => r.name === 'Bob'))
+      })
+
+      it('should_return_records_within_gt_lt_range', async () => {
+        const results = await adapter.query('users', { ageIdx: { gt: 20, lt: 30 } })
+        assert.equal(results.length, 1)
+        assert.equal(results[0].name, 'Bob')
+      })
+
+      it('should_return_records_within_gte_lt_range', async () => {
+        const results = await adapter.query('users', { ageIdx: { gte: 20, lt: 30 } })
+        assert.equal(results.length, 2)
+        assert.ok(results.some(r => r.name === 'Alice'))
+        assert.ok(results.some(r => r.name === 'Bob'))
+      })
+
+      it('should_return_records_within_gt_lte_range', async () => {
+        const results = await adapter.query('users', { ageIdx: { gt: 20, lte: 30 } })
+        assert.equal(results.length, 2)
+        assert.ok(results.some(r => r.name === 'Bob'))
+        assert.ok(results.some(r => r.name === 'Charlie'))
+      })
+
+      it('should_return_records_with_gte_only', async () => {
+        const results = await adapter.query('users', { ageIdx: { gte: 25 } })
+        assert.equal(results.length, 2)
+      })
+
+      it('should_return_records_with_lte_only', async () => {
+        const results = await adapter.query('users', { ageIdx: { lte: 25 } })
+        assert.equal(results.length, 2)
+      })
+
+      it('should_return_records_with_gt_only', async () => {
+        const results = await adapter.query('users', { ageIdx: { gt: 25 } })
+        assert.equal(results.length, 1)
+        assert.equal(results[0].name, 'Charlie')
+      })
+
+      it('should_return_records_with_lt_only', async () => {
+        const results = await adapter.query('users', { ageIdx: { lt: 25 } })
+        assert.equal(results.length, 1)
+        assert.equal(results[0].name, 'Alice')
+      })
+
+      it('should_return_empty_array_when_range_matches_no_records', async () => {
+        const results = await adapter.query('users', { ageIdx: { gte: 50, lte: 60 } })
+        assert.equal(results.length, 0)
+      })
+
+      it('should_return_all_when_range_is_empty_object', async () => {
+        const results = await adapter.query('users', { ageIdx: {} })
+        assert.equal(results.length, 3)
+      })
+    })
+
+    describe('count() — range criteria', () => {
+      beforeEach(async () => {
+        adapter = createAdapter()
+        await adapter.open({ stores: VALID_STORES_CONFIG })
+        await adapter.write('users', { id: 'u1', name: 'Alice', age: 20 })
+        await adapter.write('users', { id: 'u2', name: 'Bob', age: 25 })
+        await adapter.write('users', { id: 'u3', name: 'Charlie', age: 30 })
+      })
+
+      it('should_return_count_within_gte_lte_range', async () => {
+        const count = await adapter.count('users', { ageIdx: { gte: 20, lte: 25 } })
+        assert.equal(count, 2)
+      })
+
+      it('should_return_count_within_gt_lt_range', async () => {
+        const count = await adapter.count('users', { ageIdx: { gt: 20, lt: 30 } })
+        assert.equal(count, 1)
+      })
+
+      it('should_return_count_with_gte_only', async () => {
+        const count = await adapter.count('users', { ageIdx: { gte: 25 } })
+        assert.equal(count, 2)
+      })
+
+      it('should_return_count_with_lte_only', async () => {
+        const count = await adapter.count('users', { ageIdx: { lte: 25 } })
+        assert.equal(count, 2)
+      })
+
+      it('should_return_zero_when_range_matches_no_records', async () => {
+        const count = await adapter.count('users', { ageIdx: { gte: 50, lte: 60 } })
+        assert.equal(count, 0)
       })
     })
 

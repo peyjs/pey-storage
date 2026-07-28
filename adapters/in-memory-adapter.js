@@ -90,6 +90,30 @@ export default class InMemoryStorageAdapter {
     this._stores = new Map()
     /** @type {boolean} */
     this._isOpen = false
+    /** @type {Map<string, Map<string, string>>} */
+    this._indexFieldMap = new Map()
+  }
+
+  /**
+   * Check whether a value matches a criteria value.
+   * Supports exact match (plain value) and range queries
+   * ({ gte, lte, gt, lt }).
+   *
+   * @param {any} value
+   * @param {object | string | number} criteriaValue
+   * @returns {boolean}
+   */
+  _matchesRange(value, criteriaValue) {
+    // Undefined / missing field never matches a range filter
+    if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+      if (value === undefined || value === null) return false
+      if (criteriaValue.gte !== undefined && value < criteriaValue.gte) return false
+      if (criteriaValue.lte !== undefined && value > criteriaValue.lte) return false
+      if (criteriaValue.gt !== undefined && value <= criteriaValue.gt) return false
+      if (criteriaValue.lt !== undefined && value >= criteriaValue.lt) return false
+      return true
+    }
+    return value === criteriaValue
   }
 
   /**
@@ -102,6 +126,14 @@ export default class InMemoryStorageAdapter {
     const storesConfig = config.stores || []
     for (const storeDef of storesConfig) {
       this._stores.set(storeDef.name, new InMemoryStore(storeDef))
+      // Build index name -> field name map (mirrors IndexedDB behavior)
+      const fieldMap = new Map()
+      if (storeDef.indexes) {
+        for (const idx of storeDef.indexes) {
+          fieldMap.set(idx.name, idx.field)
+        }
+      }
+      this._indexFieldMap.set(storeDef.name, fieldMap)
     }
     this._isOpen = true
   }
@@ -141,8 +173,11 @@ export default class InMemoryStorageAdapter {
     const store = this._getStore(collection)
     const all = store.getAll()
     if (Object.keys(criteria).length === 0) return all
-    const [indexName, rangeValue] = Object.entries(criteria)[0]
-    return all.filter(r => r[indexName] === rangeValue)
+    const [indexOrField, criteriaValue] = Object.entries(criteria)[0]
+    // Resolve index name to actual field name (IndexedDB does this internally)
+    const fieldMap = this._indexFieldMap.get(collection)
+    const field = fieldMap ? (fieldMap.get(indexOrField) ?? indexOrField) : indexOrField
+    return all.filter(r => this._matchesRange(r[field], criteriaValue))
   }
 
   async count(collection, criteria = {}) {
@@ -150,8 +185,10 @@ export default class InMemoryStorageAdapter {
     const store = this._getStore(collection)
     const all = store.getAll()
     if (Object.keys(criteria).length === 0) return store.count()
-    const [indexName, rangeValue] = Object.entries(criteria)[0]
-    return all.filter(r => r[indexName] === rangeValue).length
+    const [indexOrField, criteriaValue] = Object.entries(criteria)[0]
+    const fieldMap = this._indexFieldMap.get(collection)
+    const field = fieldMap ? (fieldMap.get(indexOrField) ?? indexOrField) : indexOrField
+    return all.filter(r => this._matchesRange(r[field], criteriaValue)).length
   }
 
   async bulkWrite(collection, records) {

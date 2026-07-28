@@ -87,6 +87,31 @@ function requireOpen(db) {
   }
 }
 
+/**
+ * Build an IDBKeyRange from a criteria value.
+ *
+ * - Object with comparison operators ({ gte, lte, gt, lt }) → bound / lowerBound / upperBound
+ * - Anything else → only()
+ *
+ * @param {object | string | number} criteriaValue
+ * @returns {IDBKeyRange}
+ */
+function buildKeyRange(criteriaValue) {
+  if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+    const { gte, lte, gt, lt } = criteriaValue
+    if (gte !== undefined && lte !== undefined) return IDBKeyRange.bound(gte, lte)
+    if (gt !== undefined && lte !== undefined) return IDBKeyRange.lowerBound(gt, { lowerOpen: true })
+    if (gte !== undefined && lt !== undefined) return IDBKeyRange.upperBound(lt, { upperOpen: true })
+    if (gt !== undefined && lt !== undefined)
+      return IDBKeyRange.bound(gt, lt, { lowerOpen: true, upperOpen: true })
+    if (gte !== undefined) return IDBKeyRange.lowerBound(gte)
+    if (lte !== undefined) return IDBKeyRange.upperBound(lte)
+    if (gt !== undefined) return IDBKeyRange.lowerBound(gt, { lowerOpen: true })
+    if (lt !== undefined) return IDBKeyRange.upperBound(lt, { upperOpen: true })
+  }
+  return IDBKeyRange.only(criteriaValue)
+}
+
 // ---------------------------------------------------------------------------
 // Adapter class
 // ---------------------------------------------------------------------------
@@ -225,7 +250,10 @@ export default class IndexedDBAdapter {
 
   /**
    * Query records with a raw index/range criteria.
-   * Criteria is a plain object { indexName: rangeValue } or {} for full scan.
+   * Criteria is a plain object { indexName: value } for exact match,
+   * or { indexName: { gte, lte } } for a range — any combination of
+   * { gte, lte, gt, lt } keys (where "gt" = greater-than / "lt" =
+   * less-than, both open-bounded).
    *
    * @param {string} collection
    * @param {object} criteria
@@ -238,10 +266,11 @@ export default class IndexedDBAdapter {
       const results = []
       let cursor
 
-      if (Object.keys(criteria).length > 0) {
-        const [indexName, rangeValue] = Object.entries(criteria)[0]
+      const entries = Object.entries(criteria)
+      if (entries.length > 0) {
+        const [indexName, criteriaValue] = entries[0]
         const index = store.index(indexName)
-        cursor = index.openCursor(IDBKeyRange.only(rangeValue))
+        cursor = index.openCursor(buildKeyRange(criteriaValue))
       } else {
         cursor = store.openCursor()
       }
@@ -260,7 +289,9 @@ export default class IndexedDBAdapter {
   }
 
   /**
-   * Count records, optionally filtered.
+   * Count records, optionally filtered by a raw range query criteria.
+   * Supports the same { indexName: value } and { indexName: { gte, lte } }
+   * formats as `query()`.
    *
    * @param {string} collection
    * @param {object} [criteria]
@@ -272,9 +303,10 @@ export default class IndexedDBAdapter {
     return new Promise((resolve, reject) => {
       let request
 
-      if (Object.keys(criteria).length > 0) {
-        const [indexName, rangeValue] = Object.entries(criteria)[0]
-        request = store.index(indexName).count(IDBKeyRange.only(rangeValue))
+      const entries = Object.entries(criteria)
+      if (entries.length > 0) {
+        const [indexName, criteriaValue] = entries[0]
+        request = store.index(indexName).count(buildKeyRange(criteriaValue))
       } else {
         request = store.count()
       }
