@@ -69,21 +69,40 @@ await service.delete('users', 'u1')
 
 ### `query(collection, criteria)`
 
-Query records with a raw index/range filter. Returns an array of matching records.
+Query records with a raw index/range filter. Criteria supports exact match and range operators:
 
+**Exact match:**
 ```js
 const results = await service.query('users', { name: 'Alice' })
-// results => [{ id: 'u1', name: 'Alice' }]
 ```
+
+**Range filter** (on an indexed field):
+```js
+// age between 20 and 30 (inclusive)
+const results = await service.query('users', { ageIdx: { gte: 20, lte: 30 } })
+
+// age > 25
+const results = await service.query('users', { ageIdx: { gt: 25 } })
+
+// age < 20
+const results = await service.query('users', { ageIdx: { lt: 20 } })
+```
+
+Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<). Any combination is valid (e.g. `{ gte, lt }`).
 
 ### `count(collection, criteria?)`
 
-Count records in a collection, optionally filtered by a raw query criteria.
+Count records in a collection, optionally filtered by a raw range query criteria. Supports the same exact match and range formats as `query()`.
 
 ```js
 const total = await service.count('users')
 const filtered = await service.count('users', { name: 'Alice' })
+
+// Count records where age >= 20
+const adults = await service.count('users', { ageIdx: { gte: 20 } })
 ```
+
+Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<).
 
 ### `bulkWrite(collection, records)`
 
@@ -174,6 +193,11 @@ Plugin-level config includes:
 | `stores[].keyPath` | string | Yes (if store defined) | — |
 | `stores[].autoIncrement` | boolean | No | `false` |
 | `stores[].indexes` | array | No | `[]` |
+
+Each `indexes` entry requires:
+- `name` — index name (used in range query criteria)
+- `field` — record field this index is on
+- `unique` — whether duplicate values are disallowed
 Each store entry in `stores` requires:
 - `name` — collection/store name used in all service methods
 - `keyPath` — field name used as the primary key
