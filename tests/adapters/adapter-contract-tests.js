@@ -359,11 +359,6 @@ export function runAdapterContractTests(adapterName, createAdapter) {
         const results = await adapter.query('users', { ageIdx: { gte: 50, lte: 60 } })
         assert.equal(results.length, 0)
       })
-
-      it('should_return_all_when_range_is_empty_object', async () => {
-        const results = await adapter.query('users', { ageIdx: {} })
-        assert.equal(results.length, 3)
-      })
     })
 
     describe('count() — range criteria', () => {

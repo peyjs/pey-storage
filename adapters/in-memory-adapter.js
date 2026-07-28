@@ -106,6 +106,9 @@ export default class InMemoryStorageAdapter {
   _matchesRange(value, criteriaValue) {
     // Undefined / missing field never matches a range filter
     if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+      const { gte, lte, gt, lt } = criteriaValue
+      // Empty object has no range operators — reject (both adapters treat this as "no match")
+      if (gte === undefined && lte === undefined && gt === undefined && lt === undefined) return false
       if (value === undefined || value === null) return false
       if (criteriaValue.gte !== undefined && value < criteriaValue.gte) return false
       if (criteriaValue.lte !== undefined && value > criteriaValue.lte) return false

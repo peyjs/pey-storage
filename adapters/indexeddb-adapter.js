@@ -100,16 +100,31 @@ function buildKeyRange(criteriaValue) {
   if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
     const { gte, lte, gt, lt } = criteriaValue
     if (gte !== undefined && lte !== undefined) return IDBKeyRange.bound(gte, lte)
-    if (gt !== undefined && lte !== undefined) return IDBKeyRange.lowerBound(gt, { lowerOpen: true })
-    if (gte !== undefined && lt !== undefined) return IDBKeyRange.upperBound(lt, { upperOpen: true })
-    if (gt !== undefined && lt !== undefined)
-      return IDBKeyRange.bound(gt, lt, { lowerOpen: true, upperOpen: true })
-    if (gte !== undefined) return IDBKeyRange.lowerBound(gte)
-    if (lte !== undefined) return IDBKeyRange.upperBound(lte)
-    if (gt !== undefined) return IDBKeyRange.lowerBound(gt, { lowerOpen: true })
-    if (lt !== undefined) return IDBKeyRange.upperBound(lt, { upperOpen: true })
+    if (gte !== undefined && lt !== undefined) return IDBKeyRange.bound(gte, lt, false, true)
+    if (gt !== undefined && lte !== undefined) return IDBKeyRange.bound(gt, lte, true, false)
+    if (gt !== undefined && lt !== undefined) return IDBKeyRange.bound(gt, lt, true, true)
+    if (gte !== undefined) return IDBKeyRange.lowerBound(gte, false)
+    if (lte !== undefined) return IDBKeyRange.upperBound(lte, false)
+    if (gt !== undefined) return IDBKeyRange.lowerBound(gt, true)
+    if (lt !== undefined) return IDBKeyRange.upperBound(lt, true)
   }
   return IDBKeyRange.only(criteriaValue)
+}
+
+/**
+ * Check whether a criteria value object contains at least one range operator.
+ * An empty {} object is treated as "match nothing" to keep in-memory and
+ * IndexedDB adapters in sync (IDBKeyRange.only({}) would throw or match nothing).
+ *
+ * @param {object} criteriaValue
+ * @returns {boolean}
+ */
+function hasRangeOperators(criteriaValue) {
+  if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+    const { gte, lte, gt, lt } = criteriaValue
+    return (gte !== undefined || lte !== undefined || gt !== undefined || lt !== undefined)
+  }
+  return true // plain values (string/number) always "match" the key lookup
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +284,17 @@ export default class IndexedDBAdapter {
       const entries = Object.entries(criteria)
       if (entries.length > 0) {
         const [indexName, criteriaValue] = entries[0]
-        const index = store.index(indexName)
+        // Empty {} object has no range operators — return empty results in sync with in-memory adapter
+        if (!hasRangeOperators(criteriaValue)) {
+          resolve(results)
+          return
+        }
+        let index
+        try {
+          index = store.index(indexName)
+        } catch (rawError) {
+          throw mapError(rawError, `query[${collection}] index=${indexName}`)
+        }
         cursor = index.openCursor(buildKeyRange(criteriaValue))
       } else {
         cursor = store.openCursor()
@@ -306,7 +331,18 @@ export default class IndexedDBAdapter {
       const entries = Object.entries(criteria)
       if (entries.length > 0) {
         const [indexName, criteriaValue] = entries[0]
-        request = store.index(indexName).count(buildKeyRange(criteriaValue))
+        // Empty {} object has no range operators — return zero
+        if (!hasRangeOperators(criteriaValue)) {
+          resolve(0)
+          return
+        }
+        let index
+        try {
+          index = store.index(indexName)
+        } catch (rawError) {
+          throw mapError(rawError, `count[${collection}] index=${indexName}`)
+        }
+        request = index.count(buildKeyRange(criteriaValue))
       } else {
         request = store.count()
       }
