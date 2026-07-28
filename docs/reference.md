@@ -215,7 +215,7 @@ Each store entry in `stores` requires:
 3. **Import merge mode:** Each record is checked individually. If the key already exists, the record is skipped and added to `result.skipped`. If the key is new, it is inserted and counted in `result.imported`. Records without a valid key (undefined/null) are added to `result.errors`. Merge is not fully atomic — each record is read before the decision to write or skip.
 4. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
 5. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
-6. **Encryption:** No-op in v0.2.0. The design allows future transparent encryption without contract change.
+6. **Encryption:** No-op in v0.3.0. The design allows future transparent encryption without contract change.
 7. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
 
 ## Constraints

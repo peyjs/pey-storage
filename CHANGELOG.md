@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-28
+
+### Added
+- Range filter support on `query()` and `count()` — accepts `{ field: { gte, lte, gt, lt } }` in addition to `{ field: value }` exact match. `indexeddb-adapter.js` uses `IDBKeyRange.bound()` with positional booleans and 4-argument form for combined operators; `in-memory-adapter.js` mirrors the behavior with a `_matchesRange()` helper and `_indexFieldMap` to resolve index names to field names.
+- 15 new adapter contract tests covering all range operator combinations (single and combined operators for both `query` and `count`).
+
+### Changed
+- `hasRangeOperators()` now guards `IDBKeyRange` calls: `{ field: {} }` (empty object with no gte/lte/gt/lt) returns zero/empty consistently in both adapters instead of producing inconsistent behavior.
+- `store.index(indexName)` in the IndexedDB adapter is now wrapped in try/catch with `reject(mapError(...))` + `return`, preventing raw IndexedDB errors from leaking.
+- `BUILDING` business rule updated to reference v0.3.0 and note that encryption remains a no-op.
+
+### Documentation
+- `docs/reference.md` documents range operators, empty-object `{}` behavior, and examples for both `query()` and `count()`.
+- `manifest.json` updated `query` and `count` descriptions to include range format.
+
 ## [0.2.0] — 2026-07-19
 
 ### Added
