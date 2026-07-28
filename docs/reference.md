@@ -90,6 +90,8 @@ const results = await service.query('users', { ageIdx: { lt: 20 } })
 
 Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<). Any combination is valid (e.g. `{ gte, lt }`).
 
+**Empty criteria value:** `{ field: {} }` (i.e. an empty object with no gte/lte/gt/lt keys) matches **no records** — both the in-memory adapter and the IndexedDB adapter return an empty array. This is intentional; IDB cannot construct a valid `IDBKeyRange` from `{}`.
+
 ### `count(collection, criteria?)`
 
 Count records in a collection, optionally filtered by a raw range query criteria. Supports the same exact match and range formats as `query()`.
@@ -103,6 +105,8 @@ const adults = await service.count('users', { ageIdx: { gte: 20 } })
 ```
 
 Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<).
+
+**Empty criteria value:** `{ field: {} }` returns **zero** — consistent with `query()` returning an empty array.
 
 ### `bulkWrite(collection, records)`
 
