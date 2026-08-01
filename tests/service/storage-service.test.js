@@ -284,6 +284,179 @@ describe('StorageService', () => {
     })
   })
 
+  describe('importData() — restore mode', () => {
+    it('should_delete_all_existing_and_insert_all_payload_records_when_mode_is_restore', async () => {
+      const { service, adapter } = await createService()
+      // Pre-populate: 3 records
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('users', { id: 'u2', name: 'Bob' })
+      await adapter.write('users', { id: 'u3', name: 'Charlie' })
+
+      // Restore with 2 different records
+      const result = await service.importData(
+        { data: { users: [{ id: 'u10', name: 'Dave' }, { id: 'u11', name: 'Eve' }] } },
+        'restore'
+      )
+
+      // All old records deleted, only new ones remain
+      assert.equal(result.deleted, 3)
+      assert.equal(result.imported, 2)
+      assert.equal(result.skipped.length, 0)
+      assert.equal(result.errors.length, 0)
+
+      const r1 = await adapter.read('users', 'u1')
+      const r10 = await adapter.read('users', 'u10')
+      const r11 = await adapter.read('users', 'u11')
+      assert.equal(r1, null)
+      assert.deepEqual(r10, { id: 'u10', name: 'Dave' })
+      assert.deepEqual(r11, { id: 'u11', name: 'Eve' })
+    })
+
+    it('should_restore_multiple_collections_in_one_transaction', async () => {
+      const { service, adapter } = await createService(
+        [
+          { name: 'users', keyPath: 'id', autoIncrement: false },
+          { name: 'posts', keyPath: 'id', autoIncrement: false },
+        ]
+      )
+      // Pre-populate both collections
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('posts', { id: 'p1', title: 'Hello' })
+
+      // Restore both collections
+      const result = await service.importData(
+        {
+          data: {
+            users: [{ id: 'u10', name: 'Bob' }],
+            posts: [{ id: 'p10', title: 'World' }],
+          },
+        },
+        'restore'
+      )
+
+      assert.equal(result.deleted, 2) // 1 user + 1 post
+      assert.equal(result.imported, 2) // 1 user + 1 post
+      assert.equal(result.errors.length, 0)
+
+      const u1 = await adapter.read('users', 'u1')
+      const u10 = await adapter.read('users', 'u10')
+      const p1 = await adapter.read('posts', 'p1')
+      const p10 = await adapter.read('posts', 'p10')
+      assert.equal(u1, null)
+      assert.deepEqual(u10, { id: 'u10', name: 'Bob' })
+      assert.equal(p1, null)
+      assert.deepEqual(p10, { id: 'p10', title: 'World' })
+    })
+
+    it('should_report_errors_for_records_with_missing_key_in_restore_mode_and_continue', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+
+      const result = await service.importData(
+        {
+          data: {
+            users: [
+              { id: 'u10', name: 'Dave' },
+              { name: 'NoKey' },
+            ],
+          },
+        },
+        'restore'
+      )
+
+      // One delete + one put should have executed
+      assert.equal(result.deleted, 1)
+      assert.equal(result.imported, 1)
+      assert.equal(result.errors.length, 1)
+      assert.equal(result.errors[0].reason, 'missing-key')
+
+      // The valid record should be present
+      const r10 = await adapter.read('users', 'u10')
+      assert.deepEqual(r10, { id: 'u10', name: 'Dave' })
+    })
+
+    it('should_only_target_collections_present_in_payload_data_when_restore', async () => {
+      const { service, adapter } = await createService(
+        [
+          { name: 'users', keyPath: 'id', autoIncrement: false },
+          { name: 'posts', keyPath: 'id', autoIncrement: false },
+        ]
+      )
+      // Pre-populate both
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+      await adapter.write('posts', { id: 'p1', title: 'Hello' })
+
+      // Restore only 'users' — 'posts' should remain untouched
+      const result = await service.importData(
+        { data: { users: [{ id: 'u10', name: 'Bob' }] } },
+        'restore'
+      )
+
+      assert.equal(result.deleted, 1)
+      assert.equal(result.imported, 1)
+
+      // Users replaced
+      const u1 = await adapter.read('users', 'u1')
+      const u10 = await adapter.read('users', 'u10')
+      assert.equal(u1, null)
+      assert.deepEqual(u10, { id: 'u10', name: 'Bob' })
+
+      // Posts untouched
+      const p1 = await adapter.read('posts', 'p1')
+      assert.deepEqual(p1, { id: 'p1', title: 'Hello' })
+    })
+
+    it('should_do_nothing_when_payload_has_collections_with_no_existing_records_in_restore_mode', async () => {
+      const { service, adapter } = await createService()
+      // No pre-existing records
+
+      const result = await service.importData(
+        { data: { users: [{ id: 'u1', name: 'Alice' }] } },
+        'restore'
+      )
+
+      assert.equal(result.deleted, 0)
+      assert.equal(result.imported, 1)
+      assert.equal(result.errors.length, 0)
+
+      const r1 = await adapter.read('users', 'u1')
+      assert.deepEqual(r1, { id: 'u1', name: 'Alice' })
+    })
+
+    it('should_throw_STORE_NOT_FOUND_when_restore_target_is_unknown_collection', async () => {
+      const { service } = await createService()
+      await assert.rejects(
+        service.importData(
+          { data: { nonexistent_store: [{ id: 'u1' }] } },
+          'restore'
+        ),
+        (err) => {
+          assert.equal(err.code, ERROR_CODES.STORE_NOT_FOUND)
+          return true
+        }
+      )
+    })
+
+    it('should_return_deleted_zero_for_replace_and_merge_modes', async () => {
+      const { service, adapter } = await createService()
+      await adapter.write('users', { id: 'u1', name: 'Alice' })
+
+      // Replace mode
+      let result = await service.importData(
+        { data: { users: [{ id: 'u2', name: 'Bob' }] } },
+        'replace'
+      )
+      assert.equal(result.deleted, 0)
+
+      // Merge mode
+      result = await service.importData(
+        { data: { users: [{ id: 'u3', name: 'Charlie' }] } },
+        'merge'
+      )
+      assert.equal(result.deleted, 0)
+    })
+  })
+
   describe('exportData()', () => {
     it('should_export_data_with_metadata_when_data_exists', async () => {
       const { service, adapter } = await createService()
