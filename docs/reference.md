@@ -153,6 +153,7 @@ Import a previously exported payload. Mode controls conflict resolution:
 
 - **`'replace'`** — all records are written atomically via `bulkWrite`. Overwrites existing keys and inserts new ones. Does not delete records absent from the payload.
 - **`'merge'`** — each record is checked individually; new keys are inserted, existing keys are skipped and reported in `result.skipped`. Merge is not fully atomic per operation because each record must be read before deciding.
+- **`'restore'`** — only collections present in `payload.data` are targeted. For each target collection, **all existing keys are read first**, then a single operation array is built: one `delete` for each existing key + one `put` for each valid payload record. The entire array is sent to `adapter.transaction()` in one call — **fully atomic**. Invalid records (missing key) are reported in `errors` (reason: `'missing-key'`) and excluded from the write; they do NOT abort the transaction. Result includes `deleted: number` (count of records removed) and `imported: number` (count of valid records written).
 
 ```js
 const result = await service.importData(
@@ -160,6 +161,13 @@ const result = await service.importData(
   'merge'
 )
 // result => { imported: 1, skipped: [], errors: [] }
+
+// Restore example: replace entire 'users' collection with payload
+const restoreResult = await service.importData(
+  { data: { users: [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }] } },
+  'restore'
+)
+// restoreResult => { imported: 2, skipped: [], deleted: <count of previously existing users>, errors: [] }
 ```
 
 ## Events
@@ -213,10 +221,12 @@ Each store entry in `stores` requires:
 1. **Store validation:** Every service method validates the collection name against the configured stores list before delegating to the adapter. Unknown collections are rejected immediately with `STORE_NOT_FOUND`.
 2. **Import replace mode:** Records are written atomically via the adapter's `bulkWrite`. Existing records with matching keys are overwritten; new records are inserted. Records absent from the payload are not deleted.
 3. **Import merge mode:** Each record is checked individually. If the key already exists, the record is skipped and added to `result.skipped`. If the key is new, it is inserted and counted in `result.imported`. Records without a valid key (undefined/null) are added to `result.errors`. Merge is not fully atomic — each record is read before the decision to write or skip.
-4. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
-5. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
-6. **Encryption:** No-op in v0.3.0. The design allows future transparent encryption without contract change.
-7. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
+4. **Import restore mode:** Only collections present in `payload.data` are targeted. For each, all existing records are read via `query(collection, {})`, then a single operation array (one `delete` per existing key + one `put` per valid payload record) is sent to `adapter.transaction()` atomically. Records with missing keys are reported in `errors` and excluded from writes. All operations across all target collections execute in one transaction.
+5. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
+6. **Restore scale limit:** `restore` reads all existing keys into memory before building operations. Suitable for moderate stores (roughly < 50K records — unconfirmed, no benchmark); very large stores may hit IndexedDB transaction limits.
+7. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
+8. **Encryption:** No-op in v0.3.0. The design allows future transparent encryption without contract change.
+9. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
 
 ## Constraints
 
@@ -225,3 +235,4 @@ Each store entry in `stores` requires:
 - **No connection health-check:** Not applicable for local, in-browser IndexedDB.
 - **No remote synchronization:** This plugin operates only on local storage.
 - **No authentication:** This plugin does not handle identity or access control.
+- **Restore memory footprint:** The `'restore'` mode reads ALL existing keys into memory before building the operation array. This is suitable for moderate-sized stores (roughly < 50K records — unconfirmed, no benchmark); very large stores may hit IndexedDB transaction limits or cause memory pressure.
