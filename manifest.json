@@ -112,7 +112,7 @@
             { "name": "payload", "type": "object" },
             { "name": "mode", "type": "'replace' | 'merge' | 'restore'" }
           ],
-          "returns": "Promise<{ imported: number, skipped: object[], errors: object[] }>",
+          "returns": "Promise<{ imported: number, skipped: object[], deleted: number, errors: object[] }>",
           "errors": ["ADAPTER_NOT_OPEN", "IMPORT_INVALID_PAYLOAD", "STORE_NOT_FOUND", "QUOTA_EXCEEDED", "SERVICE_UNAVAILABLE"]
         }
       ]
