@@ -1,7 +1,7 @@
 # pey.storage
 
 [![AI](https://img.shields.io/badge/Built%20with-AI-blueviolet)](#)
-[![version](https://img.shields.io/badge/version-0.3.0-blue.svg)](#)
+[![version](https://img.shields.io/badge/version-0.4.0-blue.svg)](#)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Bonyan Architecture](https://img.shields.io/badge/bonyan-0.11-56c3bf)](https://github.com/barnevis/bonyan)
 
@@ -23,7 +23,7 @@ Register the adapter and plugin in `bootstrap.json`:
   "plugins": [
     {
       "name": "pey.storage",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "path": "plugins/pey.storage"
     }
   ],

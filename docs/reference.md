@@ -225,7 +225,7 @@ Each store entry in `stores` requires:
 5. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
 6. **Restore scale limit:** `restore` reads all existing keys into memory before building operations. Suitable for moderate stores (roughly < 50K records — unconfirmed, no benchmark); very large stores may hit IndexedDB transaction limits.
 7. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
-8. **Encryption:** No-op in v0.3.0. The design allows future transparent encryption without contract change.
+8. **Encryption:** No-op in v0.4.0. The design allows future transparent encryption without contract change.
 9. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
 
 ## Constraints

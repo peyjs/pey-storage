@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-01
+
+### Added
+- New `'restore'` mode for `importData()` — only targets collections present in `payload.data`, reads all existing keys via `query(collection, {})`, builds a single atomic operation array (one `delete` per existing key + one `put` per valid payload record) sent to `adapter.transaction()` in one call. Returns `{ imported, skipped, deleted, errors }` with `deleted: number` (actual count of records removed). Invalid records (missing key) are reported in `errors` (reason: `'missing-key'`) and excluded from the write without aborting the transaction.
+- Counts derived from actual operation array (`put` → imported, `delete` → deleted) instead of parallel payload iteration.
+- 7 new service tests for restore mode: basic restore, multi-collection atomic restore, missing-key error recovery, partial collection targeting, empty-store restore, unknown collection rejection, deleted=0 for replace/merge.
+
+### Changed
+- `importData()` return type now includes `deleted: number` for all modes (0 for replace/merge, actual count for restore).
+- `BUILDING` business rule updated to reference v0.4.0 and note that encryption remains a no-op.
+
+### Documentation
+- `docs/reference.md` documents `'restore'` mode behavior, constraints (memory footprint for large stores — unconfirmed, no benchmark), and new Business Rules 4–6 (restore mode, scale limit, deactivated service).
+- `manifest.json` updated `importData` description, mode type, and `returns` to include `deleted: number`.
+
 ## [0.3.0] — 2026-07-28
 
 ### Added
