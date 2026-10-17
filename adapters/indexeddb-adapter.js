@@ -57,16 +57,33 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
       const storeNames = new Set(db.objectStoreNames)
       const upgradeTx = event.target.transaction
 
-      for (const storeDef of storesConfig) {
-        // Existing stores come from the versionchange upgrade transaction so
-        // indexes added in config are applied to them too, not only new stores
-        const store = storeNames.has(storeDef.name)
-          ? upgradeTx.objectStore(storeDef.name)
-          : db.createObjectStore(storeDef.name, {
-              keyPath: storeDef.keyPath,
-              autoIncrement: storeDef.autoIncrement ?? false,
-            })
-        ensureIndexes(store, storeDef.indexes)
+      try {
+        for (const storeDef of storesConfig) {
+          // Existing stores come from the versionchange upgrade transaction so
+          // indexes added in config are applied to them too, not only new stores
+          const store = storeNames.has(storeDef.name)
+            ? upgradeTx.objectStore(storeDef.name)
+            : db.createObjectStore(storeDef.name, {
+                keyPath: storeDef.keyPath,
+                autoIncrement: storeDef.autoIncrement ?? false,
+              })
+          ensureIndexes(store, storeDef.indexes)
+        }
+      } catch (rawError) {
+        // Abort the versionchange transaction so partial store/index state is
+        // rolled back and the open request fails — then surface a standard
+        // Bonyan error (no open connection or leaked resources remain)
+        try {
+          upgradeTx.abort()
+        } catch {
+          // Transaction may already be aborting
+        }
+        try {
+          db.close()
+        } catch {
+          // Ignore close failures on the intermediate connection
+        }
+        reject(mapError(rawError, 'IDB.upgrade'))
       }
     }
   })
@@ -144,6 +161,100 @@ function hasRangeOperators(criteriaValue) {
   return true // plain values (string/number) always "match" the key lookup
 }
 
+/**
+ * Check whether a record field value matches a criteria value.
+ * Mirrors the in-memory adapter's matching: exact match for plain values and
+ * inclusive/exclusive range semantics for { gte, lte, gt, lt } objects.
+ * An empty {} object (no range operators) matches nothing.
+ *
+ * @param {any} value — record field value under comparison
+ * @param {object | string | number} criteriaValue
+ * @returns {boolean}
+ */
+function fieldMatches(value, criteriaValue) {
+  if (criteriaValue && typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+    const { gte, lte, gt, lt } = criteriaValue
+    if (gte === undefined && lte === undefined && gt === undefined && lt === undefined) return false
+    if (value === undefined || value === null) return false
+    if (gte !== undefined && value < gte) return false
+    if (lte !== undefined && value > lte) return false
+    if (gt !== undefined && value <= gt) return false
+    if (lt !== undefined && value >= lt) return false
+    return true
+  }
+  return value === criteriaValue
+}
+
+/**
+ * Full-store scan fallback for when a criteria key has no usable index.
+ * Opens a cursor over every record and filters in JavaScript, mirroring
+ * the in-memory adapter's field-based matching so both adapters return
+ * identical results for non-index criteria keys.
+ *
+ * @param {IDBObjectStore} store
+ * @param {string} field — record field the criteria applies to
+ * @param {object | string | number} criteriaValue
+ * @param {object} [options] — { countOnly: true } returns a number instead of records
+ * @returns {Promise<object[] | number>}
+ */
+function scanByField(store, field, criteriaValue, { countOnly = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const records = []
+    let matchedCount = 0
+    const cursorRequest = store.openCursor()
+
+    cursorRequest.onsuccess = () => {
+      const item = cursorRequest.result
+      if (!item) {
+        resolve(countOnly ? matchedCount : records)
+        return
+      }
+      const record = item.value
+      if (fieldMatches(record[field], criteriaValue)) {
+        matchedCount++
+        if (!countOnly) records.push(record)
+      }
+      item.continue()
+    }
+    cursorRequest.onerror = () => reject(mapError(cursorRequest.error, `scanByField[${store.name}]`))
+  })
+}
+
+/**
+ * Build an index name → field name map per store from config.
+ * Mirrors the in-memory adapter so a criteria key that names a configured
+ * index can be resolved to its record field for the scan fallback.
+ *
+ * @param {Array} storesConfig
+ * @returns {Map<string, Map<string, string>>}
+ */
+function buildIndexFieldMap(storesConfig) {
+  const indexFieldMap = new Map()
+  for (const storeDef of storesConfig) {
+    const fieldMap = new Map()
+    for (const idx of storeDef.indexes || []) {
+      fieldMap.set(idx.name, idx.field)
+    }
+    indexFieldMap.set(storeDef.name, fieldMap)
+  }
+  return indexFieldMap
+}
+
+/**
+ * Resolve a criteria key to the record field it filters on, mirroring the
+ * in-memory adapter: a configured index name resolves to its field; any
+ * other key is used as the field name directly.
+ *
+ * @param {Map<string, Map<string, string>>} indexFieldMap
+ * @param {string} collection
+ * @param {string} criteriaKey
+ * @returns {string}
+ */
+function resolveField(indexFieldMap, collection, criteriaKey) {
+  const fieldMap = indexFieldMap.get(collection)
+  return fieldMap ? (fieldMap.get(criteriaKey) ?? criteriaKey) : criteriaKey
+}
+
 // ---------------------------------------------------------------------------
 // Adapter class
 // ---------------------------------------------------------------------------
@@ -162,6 +273,8 @@ export default class IndexedDBAdapter {
     this._isOpen = false
     /** @type {string | null} */
     this._dbName = null
+    /** @type {Map<string, Map<string, string>>} index name → field name per store */
+    this._indexFieldMap = new Map()
   }
 
   // ------------------------------------------------------------------
@@ -192,9 +305,10 @@ export default class IndexedDBAdapter {
 
     this._db = await openDatabase(this._dbName, schemaVersion, storesConfig)
     this._isOpen = true
+    this._indexFieldMap = buildIndexFieldMap(storesConfig)
 
     // Request persistent storage (non-blocking — failure is acceptable)
-    if (navigator.storage && navigator.storage.persist) {
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(() => {
         // Persistent storage request is a best-effort operation
       })
@@ -239,7 +353,15 @@ export default class IndexedDBAdapter {
     requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readonly')
     return new Promise((resolve, reject) => {
-      const request = store.get(key)
+      let request
+      try {
+        request = store.get(key)
+      } catch {
+        // Invalid key (e.g. null) cannot be looked up — resolve null, matching
+        // the in-memory adapter's get(null) → null behavior
+        resolve(null)
+        return
+      }
       request.onsuccess = () => resolve(request.result ?? null)
       request.onerror = () => reject(mapError(request.error, `read[${collection}]`))
     })
@@ -293,42 +415,48 @@ export default class IndexedDBAdapter {
    */
   async query(collection, criteria = {}) {
     requireOpen(this._db)
-    const { store, tx } = getStore(this._db, collection, 'readonly')
-    return new Promise((resolve, reject) => {
-      const results = []
-      let cursor
+    const { store } = getStore(this._db, collection, 'readonly')
+    const entries = Object.entries(criteria)
 
-      const entries = Object.entries(criteria)
-      if (entries.length > 0) {
-        const [indexName, criteriaValue] = entries[0]
-        // Empty {} object has no range operators — return empty results in sync with in-memory adapter
-        if (!hasRangeOperators(criteriaValue)) {
-          resolve(results)
-          return
-        }
-        let index
+    // Empty {} object has no range operators — return empty results in sync
+    // with the in-memory adapter
+    if (entries.length > 0 && !hasRangeOperators(entries[0][1])) {
+      return []
+    }
+
+    const [criteriaKey, criteriaValue] = entries[0] ?? [null, null]
+
+    if (entries.length === 0 || Array.from(store.indexNames).includes(criteriaKey)) {
+      // Index fast path: a real index exists for this key (full-store cursor
+      // when no criteria is provided)
+      return new Promise((resolve, reject) => {
+        const results = []
+        let cursor
         try {
-          index = store.index(indexName)
+          cursor = entries.length === 0
+            ? store.openCursor()
+            : store.index(criteriaKey).openCursor(buildKeyRange(criteriaValue))
         } catch (rawError) {
-          reject(mapError(rawError, `query[${collection}] index=${indexName}`))
+          reject(mapError(rawError, `query[${collection}] index=${criteriaKey}`))
           return
         }
-        cursor = index.openCursor(buildKeyRange(criteriaValue))
-      } else {
-        cursor = store.openCursor()
-      }
+        cursor.onsuccess = () => {
+          const item = cursor.result
+          if (!item) {
+            resolve(results)
+            return
+          }
+          results.push(item.value)
+          item.continue()
+        }
+        cursor.onerror = () => reject(mapError(cursor.error, `query[${collection}]`))
+      })
+    }
 
-      cursor.onsuccess = () => {
-        const item = cursor?.result
-        if (!item) {
-          resolve(results)
-          return
-        }
-        results.push(item.value)
-        item.continue()
-      }
-      cursor.onerror = () => reject(mapError(cursor.error, `query[${collection}]`))
-    })
+    // Fallback: no index for this criteria key — scan the whole store and
+    // filter the record field in JS (mirrors the in-memory adapter semantics)
+    const field = resolveField(this._indexFieldMap, collection, criteriaKey)
+    return scanByField(store, field, criteriaValue)
   }
 
   /**
@@ -342,33 +470,37 @@ export default class IndexedDBAdapter {
    */
   async count(collection, criteria = {}) {
     requireOpen(this._db)
-    const { store, tx } = getStore(this._db, collection, 'readonly')
-    return new Promise((resolve, reject) => {
-      let request
+    const { store } = getStore(this._db, collection, 'readonly')
+    const entries = Object.entries(criteria)
 
-      const entries = Object.entries(criteria)
-      if (entries.length > 0) {
-        const [indexName, criteriaValue] = entries[0]
-        // Empty {} object has no range operators — return zero
-        if (!hasRangeOperators(criteriaValue)) {
-          resolve(0)
-          return
-        }
-        let index
+    // Empty {} object has no range operators — return zero
+    if (entries.length > 0 && !hasRangeOperators(entries[0][1])) {
+      return 0
+    }
+
+    const [criteriaKey, criteriaValue] = entries[0] ?? [null, null]
+
+    if (entries.length === 0 || Array.from(store.indexNames).includes(criteriaKey)) {
+      // Index fast path: a real index exists for this key (full-store count
+      // when no criteria is provided)
+      return new Promise((resolve, reject) => {
+        let request
         try {
-          index = store.index(indexName)
+          request = entries.length === 0
+            ? store.count()
+            : store.index(criteriaKey).count(buildKeyRange(criteriaValue))
         } catch (rawError) {
-          reject(mapError(rawError, `count[${collection}] index=${indexName}`))
+          reject(mapError(rawError, `count[${collection}] index=${criteriaKey}`))
           return
         }
-        request = index.count(buildKeyRange(criteriaValue))
-      } else {
-        request = store.count()
-      }
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(mapError(request.error, `count[${collection}]`))
+      })
+    }
 
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(mapError(request.error, `count[${collection}]`))
-    })
+    // Fallback: no index for this criteria key — scan and count matches in JS
+    const field = resolveField(this._indexFieldMap, collection, criteriaKey)
+    return scanByField(store, field, criteriaValue, { countOnly: true })
   }
 
   /**
@@ -428,26 +560,37 @@ export default class IndexedDBAdapter {
         return
       }
 
-      for (const op of operations) {
-        let store
-        try {
-          store = tx.objectStore(op.collection)
-        } catch (rawError) {
-          reject(mapError(rawError, `transaction[${op.collection}]`))
-          return
-        }
-        switch (op.method) {
-          case 'put':
-            store.put(op.record)
-            break
-          case 'delete':
-            store.delete(op.key)
-            break
-          default:
-            reject(buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`))
+      try {
+        for (const op of operations) {
+          let store
+          try {
+            store = tx.objectStore(op.collection)
+          } catch (rawError) {
+            tx.abort()
+            reject(mapError(rawError, `transaction[${op.collection}]`))
             return
+          }
+          switch (op.method) {
+            case 'put':
+              store.put(op.record)
+              break
+            case 'delete':
+              store.delete(op.key)
+              break
+            default:
+              // Abort the transaction so already-issued writes are rolled
+              // back, matching the in-memory adapter's staged rollback
+              tx.abort()
+              reject(buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`))
+              return
+          }
         }
+      } catch (rawError) {
+        tx.abort()
+        reject(mapError(rawError, 'transaction'))
+        return
       }
+
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, 'transaction'))
     })
