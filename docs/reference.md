@@ -92,6 +92,8 @@ Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<). Any combination is vali
 
 **Empty criteria value:** `{ field: {} }` (i.e. an empty object with no gte/lte/gt/lt keys) matches **no records** — both the in-memory adapter and the IndexedDB adapter return an empty array. This is intentional; IDB cannot construct a valid `IDBKeyRange` from `{}`.
 
+**Fully empty criteria:** `query(collection)` or `query(collection, {})` (no keys at all) returns **all records** — the in-memory adapter short-circuits on `Object.keys(criteria).length === 0` and the IndexedDB adapter opens a full-store cursor. Do not confuse this with `{ field: {} }` above, which matches nothing. This behavior is load-bearing inside this plugin itself (`exportData` and `importData` restore mode both read via `query(collection, {})`) and is pinned by the shared adapter contract test `should_return_all_records_when_no_filter_is_provided_to_query`.
+
 ### `count(collection, criteria?)`
 
 Count records in a collection, optionally filtered by a raw range query criteria. Supports the same exact match and range formats as `query()`.
@@ -153,7 +155,9 @@ Import a previously exported payload. Mode controls conflict resolution:
 
 - **`'replace'`** — all records are written atomically via `bulkWrite`. Overwrites existing keys and inserts new ones. Does not delete records absent from the payload.
 - **`'merge'`** — each record is checked individually; new keys are inserted, existing keys are skipped and reported in `result.skipped`. Merge is not fully atomic per operation because each record must be read before deciding.
-- **`'restore'`** — only collections present in `payload.data` are targeted. For each target collection, **all existing keys are read first**, then a single operation array is built: one `delete` for each existing key + one `put` for each valid payload record. The entire array is sent to `adapter.transaction()` in one call — **fully atomic**. Invalid records (missing key) are reported in `errors` (reason: `'missing-key'`) and excluded from the write; they do NOT abort the transaction. Result includes `deleted: number` (count of records removed) and `imported: number` (count of valid records written).
+- **`'restore'`** — only collections present in `payload.data` are targeted. For each target collection, **all existing keys are read first** (via `query(collection, {})`), then a single operation array is built: one `delete` for each existing key + one `put` for each valid payload record. The entire array is sent to `adapter.transaction()` in one call — **fully atomic**. Invalid records (missing key) are reported in `errors` (reason: `'missing-key'`) and excluded from the write; they do NOT abort the transaction. `skipped` is always `[]` — restore never skips records. Result includes `deleted: number` (count of records removed) and `imported: number` (count of valid records written).
+
+  If a collection in `payload.data` has an empty array (`[]`), **all existing records in that collection are deleted and no new records are written** — only `delete` operations are generated, with no `put` operations.
 
 ```js
 const result = await service.importData(
@@ -167,7 +171,15 @@ const restoreResult = await service.importData(
   { data: { users: [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }] } },
   'restore'
 )
-// restoreResult => { imported: 2, skipped: [], deleted: <count of previously existing users>, errors: [] }
+// restoreResult => { imported: 2, skipped: [], deleted: <count>, errors: [] }
+// Note: skipped is always [] — restore never skips records.
+
+// Empty payload array clears the collection
+const emptyResult = await service.importData(
+  { data: { users: [] } },
+  'restore'
+)
+// emptyResult => { imported: 0, skipped: [], deleted: <all existing users>, errors: [] }
 ```
 
 ## Events
@@ -221,9 +233,9 @@ Each store entry in `stores` requires:
 1. **Store validation:** Every service method validates the collection name against the configured stores list before delegating to the adapter. Unknown collections are rejected immediately with `STORE_NOT_FOUND`.
 2. **Import replace mode:** Records are written atomically via the adapter's `bulkWrite`. Existing records with matching keys are overwritten; new records are inserted. Records absent from the payload are not deleted.
 3. **Import merge mode:** Each record is checked individually. If the key already exists, the record is skipped and added to `result.skipped`. If the key is new, it is inserted and counted in `result.imported`. Records without a valid key (undefined/null) are added to `result.errors`. Merge is not fully atomic — each record is read before the decision to write or skip.
-4. **Import restore mode:** Only collections present in `payload.data` are targeted. For each, all existing records are read via `query(collection, {})`, then a single operation array (one `delete` per existing key + one `put` per valid payload record) is sent to `adapter.transaction()` atomically. Records with missing keys are reported in `errors` and excluded from writes. All operations across all target collections execute in one transaction.
+4. **Import restore mode:** Only collections present in `payload.data` are targeted. For each, all existing records are read via `query(collection, {})`, then a single operation array (one `delete` per existing key + one `put` per valid payload record) is sent to `adapter.transaction()` atomically. Records with missing keys are reported in `errors` and excluded from writes. All operations across all target collections execute in one transaction. `skipped` is always `[]`. If a collection's payload array is empty (`[]`), all existing records are deleted and no new records are written. See Constraints → Restore memory footprint for scale limits.
 5. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
-6. **Restore scale limit:** `restore` reads all existing keys into memory before building operations. Suitable for moderate stores (roughly < 50K records — unconfirmed, no benchmark); very large stores may hit IndexedDB transaction limits.
+6. **Restore scale limit:** See Constraints → Restore memory footprint.
 7. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
 8. **Encryption:** No-op in v0.4.0. The design allows future transparent encryption without contract change.
 9. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `importData()` return type now includes `deleted: number` for all modes (0 for replace/merge, actual count for restore).
-- `BUILDING` business rule updated to reference v0.4.0 and note that encryption remains a no-op.
+- business rule updated to reference v0.4.0 and note that encryption remains a no-op.
 
 ### Documentation
 - `docs/reference.md` documents `'restore'` mode behavior, constraints (memory footprint for large stores — unconfirmed, no benchmark), and new Business Rules 4–6 (restore mode, scale limit, deactivated service).

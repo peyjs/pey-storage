@@ -13,6 +13,25 @@ import { buildError, buildCriticalError, mapError } from '../lib/error.js'
 // ---------------------------------------------------------------------------
 
 /**
+ * Create every configured index that does not exist on the store yet.
+ * Idempotent — safe to run on every upgrade; already-present indexes
+ * (from an earlier version or a fresh object store creation) are skipped.
+ *
+ * @param {IDBObjectStore} store — newly created or existing (upgrade tx) store
+ * @param {Array} [indexes] — configured indexes for the store
+ */
+function ensureIndexes(store, indexes) {
+  if (!indexes) return
+  const existing = new Set(Array.from(store.indexNames))
+  for (const idx of indexes) {
+    if (existing.has(idx.name)) continue
+    store.createIndex(idx.name, idx.field, {
+      unique: idx.unique ?? false,
+    })
+  }
+}
+
+/**
  * Open or upgrade the IndexedDB database.
  * Creates stores and indexes from config inside onupgradeneeded.
  *
@@ -36,20 +55,18 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
     request.onupgradeneeded = (event) => {
       const db = event.target.result
       const storeNames = new Set(db.objectStoreNames)
+      const upgradeTx = event.target.transaction
 
       for (const storeDef of storesConfig) {
-        if (storeNames.has(storeDef.name)) continue
-        const store = db.createObjectStore(storeDef.name, {
-          keyPath: storeDef.keyPath,
-          autoIncrement: storeDef.autoIncrement ?? false,
-        })
-        if (storeDef.indexes) {
-          for (const idx of storeDef.indexes) {
-            store.createIndex(idx.name, idx.field, {
-              unique: idx.unique ?? false,
+        // Existing stores come from the versionchange upgrade transaction so
+        // indexes added in config are applied to them too, not only new stores
+        const store = storeNames.has(storeDef.name)
+          ? upgradeTx.objectStore(storeDef.name)
+          : db.createObjectStore(storeDef.name, {
+              keyPath: storeDef.keyPath,
+              autoIncrement: storeDef.autoIncrement ?? false,
             })
-          }
-        }
+        ensureIndexes(store, storeDef.indexes)
       }
     }
   })
