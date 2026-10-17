@@ -92,7 +92,13 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
   return new Promise((resolve, reject) => {
     validateStoresConfig(storesConfig)
 
-    const request = indexedDB.open(dbName, schemaVersion)
+    let request
+    try {
+      request = indexedDB.open(dbName, schemaVersion)
+    } catch (rawError) {
+      reject(mapError(rawError, 'IDB.open'))
+      return
+    }
 
     request.onerror = () => {
       reject(mapError(request.error, 'IDB.open'))
@@ -107,11 +113,15 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
       const storeNames = new Set(db.objectStoreNames)
       const upgradeTx = event.target.transaction
       let currentStoreName = null
+      let failed = false
 
-      // Fail the open with a dedicated structured error — abort the
-      // versionchange transaction so partial store/index state is rolled
-      // back and close the intermediate connection (no leaked resources)
-      const failUpgrade = () => {
+      // Report an upgrade failure exactly once — abort the versionchange
+      // transaction so partial store/index state is rolled back, close the
+      // intermediate connection, and record the underlying cause in detail
+      // (mapped via mapError, no record values) for debuggability
+      const failUpgrade = (rawError) => {
+        if (failed) return
+        failed = true
         try {
           upgradeTx.abort()
         } catch {
@@ -124,6 +134,7 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
         }
         const detail = { context: 'IDB.upgrade' }
         if (currentStoreName) detail.store = currentStoreName
+        if (rawError) detail.cause = mapError(rawError, 'IDB.upgrade')
         reject(buildError(ERROR_CODES.SCHEMA_UPGRADE_FAILED, 'Database schema upgrade failed', detail))
       }
       upgradeTx.onerror = (event2) => failUpgrade(event2.target.error)
@@ -648,6 +659,21 @@ export default class IndexedDBAdapter {
         return
       }
 
+      // Explicit settle guard — an explicit rejection during the operation
+      // loop must win regardless of event-handler timing (tx.onabort /
+      // tx.onerror may fire later for the same failure)
+      let settled = false
+      const resolveOnce = () => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+      const rejectOnce = (structuredError) => {
+        if (settled) return
+        settled = true
+        reject(structuredError)
+      }
+
       try {
         for (const op of operations) {
           let store
@@ -655,7 +681,7 @@ export default class IndexedDBAdapter {
             store = tx.objectStore(op.collection)
           } catch (rawError) {
             tx.abort()
-            reject(mapError(rawError, `transaction[${op.collection}]`))
+            rejectOnce(mapError(rawError, `transaction[${op.collection}]`))
             return
           }
           switch (op.method) {
@@ -669,19 +695,19 @@ export default class IndexedDBAdapter {
               // Abort the transaction so already-issued writes are rolled
               // back, matching the in-memory adapter's staged rollback
               tx.abort()
-              reject(buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`))
+              rejectOnce(buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`))
               return
           }
         }
       } catch (rawError) {
         tx.abort()
-        reject(mapError(rawError, 'transaction'))
+        rejectOnce(mapError(rawError, 'transaction'))
         return
       }
 
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(mapError(tx.error, 'transaction'))
-      tx.onabort = () => reject(mapError(tx.error, 'transaction'))
+      tx.oncomplete = resolveOnce
+      tx.onerror = () => rejectOnce(mapError(tx.error, 'transaction'))
+      tx.onabort = () => rejectOnce(mapError(tx.error, 'transaction'))
     })
   }
 }

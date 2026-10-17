@@ -248,6 +248,11 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
         assert.equal(err.code, ERROR_CODES.SCHEMA_UPGRADE_FAILED)
         assert.equal(err.source, ERROR_SOURCE)
         assert.equal(err.type, 'operational')
+        assert.equal(err.detail.store, 'users')
+        // Underlying cause recorded as a mapped standard error — no raw DOMException leak
+        assert.equal(err.detail.cause.source, ERROR_SOURCE)
+        assert.equal(err.detail.cause.type, 'operational')
+        assert.ok(err.detail.cause.code)
         return true
       }
     )
@@ -269,8 +274,10 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
   })
 
   it('should_persist_nothing_when_transaction_fails_mid_operation', async () => {
-    // A put whose record cannot produce a valid key throws while the
-    // transaction is in progress — already-issued writes must be rolled back
+    // A put whose record cannot produce a valid key (null id → DataError)
+    // throws while the transaction is in progress — the failure is caught
+    // and mapped via mapError (operational, context 'transaction'), already-
+    // issued writes are rolled back, and nothing persists
     await adapter.open({ databaseName: DB_NAME, schemaVersion: 1, stores: V2_STORES_CONFIG })
     await adapter.write('users', { id: 'u1', name: 'ali', age: 30 })
 
@@ -283,6 +290,9 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
       (err) => {
         assert.equal(err.type, 'operational')
         assert.equal(err.source, ERROR_SOURCE)
+        // detail.context proves the error came through the transaction's
+        // mapError catch path (tx aborted by this failure), not another layer
+        assert.equal(err.detail.context, 'transaction')
         assert.ok(err.code)
         return true
       }
