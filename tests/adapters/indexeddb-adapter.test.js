@@ -232,6 +232,21 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
     )
   })
 
+  it('should_reject_open_with_SCHEMA_UPGRADE_FAILED_when_stores_config_is_not_an_array', async () => {
+    // A non-array stores config (e.g. an object or a number) must surface as
+    // a structured SCHEMA_UPGRADE_FAILED error, not an unstructured TypeError
+    const brokenAdapter = new IndexedDBStorageAdapter()
+    await assert.rejects(
+      brokenAdapter.open({ databaseName: 'non-array-db', schemaVersion: 1, stores: { name: 'users' } }),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.SCHEMA_UPGRADE_FAILED)
+        assert.equal(err.source, ERROR_SOURCE)
+        assert.equal(err.type, 'operational')
+        return true
+      }
+    )
+  })
+
   it('should_reject_open_with_SCHEMA_UPGRADE_FAILED_when_unique_index_conflicts_with_existing_records', async () => {
     // A genuinely failing upgrade: unique index over duplicate values that
     // already exist in the database — the upgrade transaction aborts and a
@@ -249,8 +264,10 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
         assert.equal(err.source, ERROR_SOURCE)
         assert.equal(err.type, 'operational')
         assert.equal(err.detail.store, 'users')
-        // Underlying cause recorded as a mapped standard error — no raw DOMException leak
-        assert.equal(err.detail.cause.source, ERROR_SOURCE)
+        // Nested cause recorded as mapped code/type only — no raw DOMException
+        // text may leak through detail.cause
+        assert.equal(err.detail.cause.source, undefined)
+        assert.equal(err.detail.cause.message, undefined)
         assert.equal(err.detail.cause.type, 'operational')
         assert.ok(err.detail.cause.code)
         return true

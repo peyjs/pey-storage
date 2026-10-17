@@ -40,6 +40,13 @@ function ensureIndexes(store, indexes) {
  * @throws {object} Standard Bonyan error SCHEMA_UPGRADE_FAILED on invalid config
  */
 function validateStoresConfig(storesConfig) {
+  if (!Array.isArray(storesConfig)) {
+    throw buildError(
+      ERROR_CODES.SCHEMA_UPGRADE_FAILED,
+      'Stores configuration must be an array',
+      { context: 'IDB.config' }
+    )
+  }
   const storeNames = new Set()
   for (const storeDef of storesConfig) {
     if (!storeDef || typeof storeDef.name !== 'string' || storeDef.name === '') {
@@ -122,11 +129,7 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
       const failUpgrade = (rawError) => {
         if (failed) return
         failed = true
-        try {
-          upgradeTx.abort()
-        } catch {
-          // Transaction may already be aborting
-        }
+        abortSafely(upgradeTx)
         try {
           db.close()
         } catch {
@@ -134,7 +137,12 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
         }
         const detail = { context: 'IDB.upgrade' }
         if (currentStoreName) detail.store = currentStoreName
-        if (rawError) detail.cause = mapError(rawError, 'IDB.upgrade')
+        if (rawError) {
+          // Nested cause carries code/type only — no raw error text or
+          // record data may leak through the nested structure
+          const cause = mapError(rawError, 'IDB.upgrade')
+          detail.cause = { code: cause.code, type: cause.type }
+        }
         reject(buildError(ERROR_CODES.SCHEMA_UPGRADE_FAILED, 'Database schema upgrade failed', detail))
       }
       upgradeTx.onerror = (event2) => failUpgrade(event2.target.error)
@@ -158,6 +166,21 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
       }
     }
   })
+}
+
+/**
+ * Abort a transaction without letting the abort call itself throw and mask
+ * the error being reported (aborting a transaction that already failed or
+ * was committed/aborted throws from the host).
+ *
+ * @param {IDBTransaction} tx
+ */
+function abortSafely(tx) {
+  try {
+    tx.abort()
+  } catch {
+    // Transaction may already be failing/aborting — the primary error wins
+  }
 }
 
 /**
@@ -453,7 +476,7 @@ export default class IndexedDBAdapter {
       try {
         store.put(record)
       } catch (rawError) {
-        tx.abort()
+        abortSafely(tx)
         reject(mapError(rawError, `write[${collection}]`))
         return
       }
@@ -477,7 +500,7 @@ export default class IndexedDBAdapter {
       try {
         store.delete(key)
       } catch (rawError) {
-        tx.abort()
+        abortSafely(tx)
         reject(mapError(rawError, `delete[${collection}]`))
         return
       }
@@ -604,7 +627,7 @@ export default class IndexedDBAdapter {
           store.put(record)
         }
       } catch (rawError) {
-        tx.abort()
+        abortSafely(tx)
         reject(mapError(rawError, `bulkWrite[${collection}]`))
         return
       }
@@ -630,7 +653,7 @@ export default class IndexedDBAdapter {
           store.delete(key)
         }
       } catch (rawError) {
-        tx.abort()
+        abortSafely(tx)
         reject(mapError(rawError, `bulkDelete[${collection}]`))
         return
       }
@@ -680,7 +703,7 @@ export default class IndexedDBAdapter {
           try {
             store = tx.objectStore(op.collection)
           } catch (rawError) {
-            tx.abort()
+            abortSafely(tx)
             rejectOnce(mapError(rawError, `transaction[${op.collection}]`))
             return
           }
@@ -694,13 +717,13 @@ export default class IndexedDBAdapter {
             default:
               // Abort the transaction so already-issued writes are rolled
               // back, matching the in-memory adapter's staged rollback
-              tx.abort()
+              abortSafely(tx)
               rejectOnce(buildError(ERROR_CODES.TRANSACTION_FAILED, `Unknown operation: ${op.method}`))
               return
           }
         }
       } catch (rawError) {
-        tx.abort()
+        abortSafely(tx)
         rejectOnce(mapError(rawError, 'transaction'))
         return
       }
