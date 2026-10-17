@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-10-17
+
+### Added
+- Added the `SCHEMA_UPGRADE_FAILED` error code: schema configuration is validated before any upgrade work and an aborted upgrade reports this code with the underlying cause summarized in `detail`. Schema upgrade behavior is documented in `docs/reference.md`.
+- Added a full-store scan fallback for `query()` and `count()` criteria keys that are not live database indexes, so results are identical to the in-memory adapter. See `docs/reference.md` for the performance note.
+- Added the shared adapter contract test run against the IndexedDB adapter in Node (`fake-indexeddb` added as a devDependency).
+
+### Changed
+- Changed write and transaction primitives (`write`, `delete`, `bulkWrite`, `bulkDelete`, `transaction`) to reject with a standard error when a transaction aborts or a synchronous write fails, and to abort safely so the primary error is never masked.
+- Changed schema-upgrade failure handling to abort the versionchange transaction, close the intermediate connection, and reject `open()` exactly once with a sanitized cause (error codes only, no raw error text).
+- Changed `open()` to guard `navigator` access so the adapter also runs in non-browser environments.
+
+### Fixed
+- Fixed configured indexes not being created for **existing** stores on a schema upgrade; index creation is idempotent, so re-declared indexes no longer error.
+- Fixed transaction rollback for mid-operation failures — nothing from an aborted transaction persists.
+- Fixed `read(collection, null)` to resolve `null` and raw `NotFoundError` (unknown store) to surface as the documented `STORE_NOT_FOUND`.
+
 ## [0.4.0] — 2026-08-01
 
 ### Added
