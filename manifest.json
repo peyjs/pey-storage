@@ -1,6 +1,6 @@
 {
   "name": "pey.storage",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "architecture": "0.11",
   "description": "Generic storage service backed by a swappable adapter (currently IndexedDB)",
 
@@ -49,7 +49,7 @@
         },
         {
           "name": "query",
-          "description": "Query records with a raw index/range criteria. Supports exact match { field: value } and range { field: { gte, lte, gt, lt } } where each key is optional and any combination is valid.",
+          "description": "Query records with a raw index/range criteria. Supports exact match { field: value } and range { field: { gte, lte, gt, lt } } where each key is optional and any combination is valid. A criteria key that is not a live database index is served by a full-store scan filtered on that record field (results identical to the in-memory adapter; slow on very large stores).",
           "params": [
             { "name": "collection", "type": "string" },
             { "name": "criteria", "type": "object" }
@@ -59,7 +59,7 @@
         },
         {
           "name": "count",
-          "description": "Count records, optionally filtered by a raw range query criteria. Supports exact match { field: value } and range { field: { gte, lte, gt, lt } }.",
+          "description": "Count records, optionally filtered by a raw range query criteria. Supports exact match { field: value } and range { field: { gte, lte, gt, lt } }. A criteria key that is not a live database index is served by a full-store scan filtered on that record field (slow on very large stores).",
           "params": [
             { "name": "collection", "type": "string" },
             { "name": "criteria", "type": "object" }

@@ -19,8 +19,10 @@ pey.storage/
 │   └── in-memory-adapter.js   — Test substitute with same interface
 └── tests/
     ├── adapters/
-    │   ├── adapter-contract-tests.js   — Shared contract tests for all storage adapters
-    │   └── in-memory-adapter.test.js   — In-memory adapter specific tests
+    │   ├── adapter-contract-tests.js             — Shared contract tests for all storage adapters
+    │   ├── in-memory-adapter.test.js             — In-memory adapter specific tests + contract run
+    │   ├── indexeddb-adapter-contract.test.js    — Shared contract run against the IndexedDB adapter (fake-indexeddb)
+    │   └── indexeddb-adapter.test.js             — IndexedDB upgrade/error-path specific tests (fake-indexeddb)
     └── service/
         └── storage-service.test.js     — Service method tests
 ```
@@ -89,6 +91,8 @@ const results = await service.query('users', { ageIdx: { lt: 20 } })
 ```
 
 Operators: `gte` (≥), `lte` (≤), `gt` (>), `lt` (<). Any combination is valid (e.g. `{ gte, lt }`).
+
+**Criteria key resolution (IndexedDB adapter):** a criteria key that names an index actually present in the database is served through that index (fast path). Any other key — a non-indexed field name, or a configured index name that the database version does not have yet — falls back to a full-store scan filtered on the record field in JavaScript, mirroring the in-memory adapter. Both adapters therefore return identical results for any criteria key; no "missing index" error is produced, the scan simply resolves the configured index name to its field via config. **Performance note:** the scan reads and filters every record in the store — fine for small collections, noticeably slow on very large stores; index criteria keys whenever large stores are queried.
 
 **Empty criteria value:** `{ field: {} }` (i.e. an empty object with no gte/lte/gt/lt keys) matches **no records** — both the in-memory adapter and the IndexedDB adapter return an empty array. This is intentional; IDB cannot construct a valid `IDBKeyRange` from `{}`.
 
@@ -199,6 +203,7 @@ const emptyResult = await service.importData(
 | `QUOTA_EXCEEDED` | operational | Storage quota exceeded (write, bulkWrite, transaction) |
 | `STORAGE_UNAVAILABLE` | critical / startup | Thrown by the adapter as `critical` when IndexedDB is unavailable (private browsing, disabled). When this error surfaces through `prepare()` during plugin startup, it is re-wrapped as `startup` type (see `index.js`). |
 | `TRANSACTION_FAILED` | operational | A transaction operation fails (invalid method, constraint violation) |
+| `SCHEMA_UPGRADE_FAILED` | operational (re-wrapped as `startup` when it surfaces through `prepare()`) | Schema stores/index configuration is duplicate or inconsistent (validated before any upgrade work), or the schema upgrade transaction aborted while running — the upgrade is rolled back and the database keeps its previous version |
 | `IMPORT_INVALID_PAYLOAD` | operational | Import payload is null, not an object, or missing the `data` property |
 | `SERVICE_UNAVAILABLE` | operational | Storage service has been deactivated (any method) |
 
@@ -228,6 +233,8 @@ Each store entry in `stores` requires:
 - `autoIncrement` — whether keys are auto-generated when missing
 - `indexes` (optional) — secondary indexes, each with `name`, `field`, and `unique`
 
+**Schema upgrades:** when `schemaVersion` increases, the upgrade creates missing **stores and indexes** declared in the config — including indexes added to stores that already exist (idempotent: indexes already present on the store are skipped, so re-declaring them does not error). The schema configuration is validated **before** any upgrade work starts: duplicate store names, duplicate index names within a store, or inconsistent definitions (missing/empty store or index `name`/`field`) reject the open with `SCHEMA_UPGRADE_FAILED`. An upgrade that conflicts with existing data (e.g. a `unique` index over duplicate values already in the store) aborts the version-change transaction and also surfaces `SCHEMA_UPGRADE_FAILED`. In both cases the database keeps its previous version, `open()` rejects with a structured standard error, and no open connection is left behind.
+
 ## Business Rules
 
 1. **Store validation:** Every service method validates the collection name against the configured stores list before delegating to the adapter. Unknown collections are rejected immediately with `STORE_NOT_FOUND`.
@@ -237,7 +244,7 @@ Each store entry in `stores` requires:
 5. **Transaction rollback:** Operations are applied to snapshots. If any operation fails, the snapshot is discarded and no changes are committed.
 6. **Restore scale limit:** See Constraints → Restore memory footprint.
 7. **Deactivated service:** After `onDeactivated` or `onShutdown` is called, all service methods return `SERVICE_UNAVAILABLE` instead of executing.
-8. **Encryption:** No-op in v0.4.0. The design allows future transparent encryption without contract change.
+8. **Encryption:** No-op in v0.5.0. The design allows future transparent encryption without contract change.
 9. **Export format version:** Export metadata carries `EXPORT_FORMAT_VERSION` (`1.0.0`) independently of the plugin version or database schema version.
 
 ## Constraints

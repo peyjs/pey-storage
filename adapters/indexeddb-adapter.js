@@ -32,6 +32,54 @@ function ensureIndexes(store, indexes) {
 }
 
 /**
+ * Validate the stores configuration before any upgrade work starts.
+ * Detects duplicate or inconsistent store/index definitions that would
+ * otherwise be silently partially applied (or skipped) during the upgrade.
+ *
+ * @param {Array} storesConfig
+ * @throws {object} Standard Bonyan error SCHEMA_UPGRADE_FAILED on invalid config
+ */
+function validateStoresConfig(storesConfig) {
+  const storeNames = new Set()
+  for (const storeDef of storesConfig) {
+    if (!storeDef || typeof storeDef.name !== 'string' || storeDef.name === '') {
+      throw buildError(
+        ERROR_CODES.SCHEMA_UPGRADE_FAILED,
+        'Every store definition requires a non-empty name',
+        { context: 'IDB.config' }
+      )
+    }
+    if (storeNames.has(storeDef.name)) {
+      throw buildError(
+        ERROR_CODES.SCHEMA_UPGRADE_FAILED,
+        'Duplicate store name in schema configuration',
+        { context: `IDB.config[${storeDef.name}]` }
+      )
+    }
+    storeNames.add(storeDef.name)
+
+    const indexNames = new Set()
+    for (const idx of storeDef.indexes || []) {
+      if (!idx || typeof idx.name !== 'string' || idx.name === '' || typeof idx.field !== 'string' || idx.field === '') {
+        throw buildError(
+          ERROR_CODES.SCHEMA_UPGRADE_FAILED,
+          'Every index definition requires a non-empty name and field',
+          { context: `IDB.config[${storeDef.name}]` }
+        )
+      }
+      if (indexNames.has(idx.name)) {
+        throw buildError(
+          ERROR_CODES.SCHEMA_UPGRADE_FAILED,
+          'Duplicate index name in schema configuration',
+          { context: `IDB.config[${storeDef.name}] index=${idx.name}` }
+        )
+      }
+      indexNames.add(idx.name)
+    }
+  }
+}
+
+/**
  * Open or upgrade the IndexedDB database.
  * Creates stores and indexes from config inside onupgradeneeded.
  *
@@ -42,6 +90,8 @@ function ensureIndexes(store, indexes) {
  */
 function openDatabase(dbName, schemaVersion, storesConfig) {
   return new Promise((resolve, reject) => {
+    validateStoresConfig(storesConfig)
+
     const request = indexedDB.open(dbName, schemaVersion)
 
     request.onerror = () => {
@@ -56,9 +106,32 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
       const db = event.target.result
       const storeNames = new Set(db.objectStoreNames)
       const upgradeTx = event.target.transaction
+      let currentStoreName = null
+
+      // Fail the open with a dedicated structured error — abort the
+      // versionchange transaction so partial store/index state is rolled
+      // back and close the intermediate connection (no leaked resources)
+      const failUpgrade = () => {
+        try {
+          upgradeTx.abort()
+        } catch {
+          // Transaction may already be aborting
+        }
+        try {
+          db.close()
+        } catch {
+          // Ignore close failures on the intermediate connection
+        }
+        const detail = { context: 'IDB.upgrade' }
+        if (currentStoreName) detail.store = currentStoreName
+        reject(buildError(ERROR_CODES.SCHEMA_UPGRADE_FAILED, 'Database schema upgrade failed', detail))
+      }
+      upgradeTx.onerror = (event2) => failUpgrade(event2.target.error)
+      upgradeTx.onabort = () => failUpgrade(upgradeTx.error)
 
       try {
         for (const storeDef of storesConfig) {
+          currentStoreName = storeDef.name
           // Existing stores come from the versionchange upgrade transaction so
           // indexes added in config are applied to them too, not only new stores
           const store = storeNames.has(storeDef.name)
@@ -70,20 +143,7 @@ function openDatabase(dbName, schemaVersion, storesConfig) {
           ensureIndexes(store, storeDef.indexes)
         }
       } catch (rawError) {
-        // Abort the versionchange transaction so partial store/index state is
-        // rolled back and the open request fails — then surface a standard
-        // Bonyan error (no open connection or leaked resources remain)
-        try {
-          upgradeTx.abort()
-        } catch {
-          // Transaction may already be aborting
-        }
-        try {
-          db.close()
-        } catch {
-          // Ignore close failures on the intermediate connection
-        }
-        reject(mapError(rawError, 'IDB.upgrade'))
+        failUpgrade(rawError)
       }
     }
   })
@@ -378,10 +438,17 @@ export default class IndexedDBAdapter {
   async write(collection, record) {
     requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
-    store.put(record)
     return new Promise((resolve, reject) => {
+      try {
+        store.put(record)
+      } catch (rawError) {
+        tx.abort()
+        reject(mapError(rawError, `write[${collection}]`))
+        return
+      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `write[${collection}]`))
+      tx.onabort = () => reject(mapError(tx.error, `write[${collection}]`))
     })
   }
 
@@ -395,10 +462,17 @@ export default class IndexedDBAdapter {
   async delete(collection, key) {
     requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
-    store.delete(key)
     return new Promise((resolve, reject) => {
+      try {
+        store.delete(key)
+      } catch (rawError) {
+        tx.abort()
+        reject(mapError(rawError, `delete[${collection}]`))
+        return
+      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `delete[${collection}]`))
+      tx.onabort = () => reject(mapError(tx.error, `delete[${collection}]`))
     })
   }
 
@@ -513,12 +587,19 @@ export default class IndexedDBAdapter {
   async bulkWrite(collection, records) {
     requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
-    for (const record of records) {
-      store.put(record)
-    }
     return new Promise((resolve, reject) => {
+      try {
+        for (const record of records) {
+          store.put(record)
+        }
+      } catch (rawError) {
+        tx.abort()
+        reject(mapError(rawError, `bulkWrite[${collection}]`))
+        return
+      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `bulkWrite[${collection}]`))
+      tx.onabort = () => reject(mapError(tx.error, `bulkWrite[${collection}]`))
     })
   }
 
@@ -532,12 +613,19 @@ export default class IndexedDBAdapter {
   async bulkDelete(collection, keys) {
     requireOpen(this._db)
     const { store, tx } = getStore(this._db, collection, 'readwrite')
-    for (const key of keys) {
-      store.delete(key)
-    }
     return new Promise((resolve, reject) => {
+      try {
+        for (const key of keys) {
+          store.delete(key)
+        }
+      } catch (rawError) {
+        tx.abort()
+        reject(mapError(rawError, `bulkDelete[${collection}]`))
+        return
+      }
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, `bulkDelete[${collection}]`))
+      tx.onabort = () => reject(mapError(tx.error, `bulkDelete[${collection}]`))
     })
   }
 
@@ -593,6 +681,7 @@ export default class IndexedDBAdapter {
 
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(mapError(tx.error, 'transaction'))
+      tx.onabort = () => reject(mapError(tx.error, 'transaction'))
     })
   }
 }

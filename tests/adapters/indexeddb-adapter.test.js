@@ -10,7 +10,7 @@ import { ERROR_CODES, ERROR_SOURCE } from '../../lib/constants.js'
 
 const DB_NAME = 'test-upgrade-db'
 
-// Two indexes with the same name — makes createIndex throw during upgrade
+// Duplicate index name within one store — rejected before any upgrade work
 const DUPLICATE_INDEX_CONFIG = [
   {
     name: 'users',
@@ -20,6 +20,27 @@ const DUPLICATE_INDEX_CONFIG = [
       { name: 'dupIdx', field: 'age', unique: false },
       { name: 'dupIdx', field: 'name', unique: false },
     ],
+  },
+]
+
+// Inconsistent index definition — missing field
+const MISSING_FIELD_CONFIG = [
+  {
+    name: 'users',
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: [{ name: 'blankIdx', field: '', unique: false }],
+  },
+]
+
+// Valid config, but incompatible with data already in the database:
+// unique index over duplicate existing values — a genuinely failing upgrade
+const UNIQUE_VIOLATION_CONFIG = [
+  {
+    name: 'users',
+    keyPath: 'id',
+    autoIncrement: false,
+    indexes: [{ name: 'nameIdx', field: 'name', unique: true }],
   },
 ]
 
@@ -167,36 +188,6 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
     )
   })
 
-  it('should_reject_open_with_STANDARD_error_and_leave_adapter_closed_when_upgrade_fails', async () => {
-    // Duplicate index names make createIndex throw inside onupgradeneeded —
-    // the failure must abort the upgrade transaction and surface a standard
-    // error instead of resolving a half-migrated connection
-    const brokenAdapter = new IndexedDBStorageAdapter()
-    await assert.rejects(
-      brokenAdapter.open({ databaseName: 'bad-upgrade-db', schemaVersion: 1, stores: DUPLICATE_INDEX_CONFIG }),
-      (err) => {
-        assert.equal(err.code, ERROR_CODES.TRANSACTION_FAILED)
-        assert.equal(err.source, ERROR_SOURCE)
-        assert.equal(err.type, 'operational')
-        return true
-      }
-    )
-
-    // No open connection remains after the failed upgrade
-    await assert.rejects(
-      brokenAdapter.read('users', 'u1'),
-      (err) => {
-        assert.equal(err.code, ERROR_CODES.ADAPTER_NOT_OPEN)
-        return true
-      }
-    )
-
-    // The same factory remains usable for a fresh, valid open
-    const recoveryAdapter = new IndexedDBStorageAdapter()
-    await recoveryAdapter.open({ databaseName: 'good-upgrade-db', schemaVersion: 1, stores: V2_STORES_CONFIG })
-    await recoveryAdapter.close()
-  })
-
   it('should_resolve_null_when_read_is_called_with_an_invalid_null_key', async () => {
     // IDB store.get(null) cannot be constructed — must behave like the
     // in-memory adapter and resolve null, not throw
@@ -205,5 +196,106 @@ describe('IndexedDBStorageAdapter schema upgrade', () => {
 
     const record = await adapter.read('users', null)
     assert.equal(record, null)
+  })
+
+  it('should_reject_open_with_SCHEMA_UPGRADE_FAILED_when_stores_config_has_duplicate_index_names', async () => {
+    // Pre-upgrade validation: duplicate/inconsistent schema config must be
+    // reported as a standard error before the upgrade mutates the database
+    const brokenAdapter = new IndexedDBStorageAdapter()
+    await assert.rejects(
+      brokenAdapter.open({ databaseName: 'validated-db', schemaVersion: 1, stores: DUPLICATE_INDEX_CONFIG }),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.SCHEMA_UPGRADE_FAILED)
+        assert.equal(err.source, ERROR_SOURCE)
+        assert.equal(err.type, 'operational')
+        return true
+      }
+    )
+    await assert.rejects(
+      brokenAdapter.read('users', 'u1'),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.ADAPTER_NOT_OPEN)
+        return true
+      }
+    )
+  })
+
+  it('should_reject_open_with_SCHEMA_UPGRADE_FAILED_when_index_definition_is_inconsistent', async () => {
+    const brokenAdapter = new IndexedDBStorageAdapter()
+    await assert.rejects(
+      brokenAdapter.open({ databaseName: 'validate-field-db', schemaVersion: 1, stores: MISSING_FIELD_CONFIG }),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.SCHEMA_UPGRADE_FAILED)
+        assert.equal(err.source, ERROR_SOURCE)
+        return true
+      }
+    )
+  })
+
+  it('should_reject_open_with_SCHEMA_UPGRADE_FAILED_when_unique_index_conflicts_with_existing_records', async () => {
+    // A genuinely failing upgrade: unique index over duplicate values that
+    // already exist in the database — the upgrade transaction aborts and a
+    // structured SCHEMA_UPGRADE_FAILED error surfaces, nothing leaks open
+    await adapter.open({ databaseName: 'unique-fail-db', schemaVersion: 1, stores: V1_STORES_CONFIG })
+    await adapter.write('users', { id: 'u1', name: 'ali', age: 30 })
+    await adapter.write('users', { id: 'u2', name: 'ali', age: 41 })
+    await adapter.close()
+
+    adapter = new IndexedDBStorageAdapter()
+    await assert.rejects(
+      adapter.open({ databaseName: 'unique-fail-db', schemaVersion: 2, stores: UNIQUE_VIOLATION_CONFIG }),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.SCHEMA_UPGRADE_FAILED)
+        assert.equal(err.source, ERROR_SOURCE)
+        assert.equal(err.type, 'operational')
+        return true
+      }
+    )
+
+    // No open connection remains after the failed upgrade
+    await assert.rejects(
+      adapter.read('users', 'u1'),
+      (err) => {
+        assert.equal(err.code, ERROR_CODES.ADAPTER_NOT_OPEN)
+        return true
+      }
+    )
+
+    // The database stays usable (upgrade rolled back to version 1)
+    const recoveryAdapter = new IndexedDBStorageAdapter()
+    await recoveryAdapter.open({ databaseName: 'unique-fail-db', schemaVersion: 1, stores: V1_STORES_CONFIG })
+    const kept = await recoveryAdapter.read('users', 'u1')
+    assert.deepEqual(kept, { id: 'u1', name: 'ali', age: 30 })
+  })
+
+  it('should_persist_nothing_when_transaction_fails_mid_operation', async () => {
+    // A put whose record cannot produce a valid key throws while the
+    // transaction is in progress — already-issued writes must be rolled back
+    await adapter.open({ databaseName: DB_NAME, schemaVersion: 1, stores: V2_STORES_CONFIG })
+    await adapter.write('users', { id: 'u1', name: 'ali', age: 30 })
+
+    await assert.rejects(
+      adapter.transaction([
+        { method: 'put', collection: 'users', record: { id: 'u2', name: 'bob', age: 22 } },
+        { method: 'put', collection: 'users', record: { id: null, name: 'bad', age: 1 } },
+        { method: 'put', collection: 'users', record: { id: 'u3', name: 'carl', age: 33 } },
+      ]),
+      (err) => {
+        assert.equal(err.type, 'operational')
+        assert.equal(err.source, ERROR_SOURCE)
+        assert.ok(err.code)
+        return true
+      }
+    )
+
+    // Nothing from the failed transaction persisted
+    const u2 = await adapter.read('users', 'u2')
+    assert.equal(u2, null)
+    const u3 = await adapter.read('users', 'u3')
+    assert.equal(u3, null)
+
+    // Pre-existing records are untouched
+    const u1 = await adapter.read('users', 'u1')
+    assert.deepEqual(u1, { id: 'u1', name: 'ali', age: 30 })
   })
 })
