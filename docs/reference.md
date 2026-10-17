@@ -206,6 +206,7 @@ const emptyResult = await service.importData(
 | `SCHEMA_UPGRADE_FAILED` | operational (re-wrapped as `startup` when it surfaces through `prepare()`) | Schema stores/index configuration is duplicate or inconsistent (validated before any upgrade work), or the schema upgrade transaction aborted while running — the upgrade is rolled back and the database keeps its previous version |
 | `IMPORT_INVALID_PAYLOAD` | operational | Import payload is null, not an object, or missing the `data` property |
 | `SERVICE_UNAVAILABLE` | operational | Storage service has been deactivated (any method) |
+| `UNKNOWN_ERROR` | operational | Generic fallback for any unexpected storage error that does not match a dedicated code — raw error text is reduced to a safe substring |
 
 ## Config
 
